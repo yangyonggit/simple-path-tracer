@@ -3,7 +3,12 @@
 #include <embree4/rtcore.h>
 #include <glm/glm.hpp>
 #include <random>
+#include <vector>
+#include <atomic>
 #include "Light.h"
+
+// Forward declaration
+class Camera;
 
 class PathTracer {
 public:
@@ -46,6 +51,12 @@ public:
     // Main tracing interface
     glm::vec3 traceRay(RTCScene scene, const glm::vec3& origin, 
                       const glm::vec3& direction) const;
+    
+    // Render entire image using parallel tile processing
+    void renderImage(std::vector<unsigned char>& pixels, int width, int height,
+                    const Camera& camera, RTCScene scene,
+                    std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples,
+                    bool camera_moved, std::atomic<int>& tiles_completed) const;
     
     // Settings management
     void setSettings(const Settings& settings) { m_settings = settings; }

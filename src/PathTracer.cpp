@@ -7,6 +7,8 @@
 #include <vector>
 #include <atomic>
 #include <iostream>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -232,6 +234,32 @@ glm::vec3 PathTracer::traceRay(RTCScene scene, const glm::vec3& origin,
     color = glm::sqrt(color);
     
     return color;
+}
+
+void PathTracer::renderImage(std::vector<unsigned char>& pixels, int width, int height,
+                            const Camera& camera, RTCScene scene,
+                            std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples,
+                            bool camera_moved, std::atomic<int>& tiles_completed) const {
+    const int TILE_SIZE = 64;  // Match the tile size from main.cpp
+    
+    // Calculate tile dimensions
+    int numTilesX = (width + TILE_SIZE - 1) / TILE_SIZE;
+    int numTilesY = (height + TILE_SIZE - 1) / TILE_SIZE;
+    int totalTiles = numTilesX * numTilesY;
+    
+    // Reset progress counter
+    tiles_completed = 0;
+    
+    // Parallel tile rendering using TBB
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, totalTiles), 
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i < range.end(); i++) {
+                renderTileTask((int)i, 0, pixels, width, height, 
+                              camera, scene, *this, numTilesX, numTilesY,
+                              accumulation_buffer, accumulated_samples,
+                              camera_moved, tiles_completed);
+            }
+        });
 }
 
 void PathTracer::renderTileTask(int tileIndex, int threadIndex, std::vector<unsigned char>& pixels,

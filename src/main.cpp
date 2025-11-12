@@ -92,6 +92,61 @@ void processInput() {
         g_camera->processKeyboard(Camera::RIGHT, deltaTime);
 }
 
+// Setup PathTracer with lights and scene
+void setupPathTracerWithLights(PathTracer& path_tracer) {
+    // Set up lighting
+    LightManager& light_manager = path_tracer.getLightManager();
+    
+    // Add a directional light (like sun)
+    light_manager.addDirectionalLight(
+        glm::vec3(-1.0f, -1.0f, -1.0f), // Direction: top-right-front to bottom-left-back
+        glm::vec3(1.0f, 0.95f, 0.8f),  // Warm white color
+        2.0f                           // Intensity
+    );
+    
+    // Add a point light above the scene
+    light_manager.addPointLight(
+        glm::vec3(1.5f, 2.0f, 1.5f),  // Position above and to the side
+        glm::vec3(0.8f, 0.9f, 1.0f),  // Cool white color
+        8.0f                           // Intensity
+    );
+}
+
+// Initialize OpenGL texture and rendering setup
+GLuint initializeGLTexture() {
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    // Ensure correct row alignment for 3-byte RGB data
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    
+    return texture;
+}
+
+// Render frame to OpenGL texture and display
+void renderGLFrame(GLuint texture, const std::vector<unsigned char>& image) {
+    // Upload texture
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, IMAGE_WIDTH, IMAGE_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, image.data());
+
+    // Render
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glBegin(GL_QUADS);
+    // Flip top/bottom vertex positions as requested (invert Y for each vertex)
+    // Texture coordinates remain the same; only vertex positions swap vertically.
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, 1.0f);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, 1.0f);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, -1.0f);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, -1.0f);
+    glEnd();
+}
+
 // Function to initialize OpenGL and create a window
 GLFWwindow* initializeOpenGL(int width, int height) {
     if (!glfwInit()) {
@@ -140,33 +195,12 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
     settings.max_depth = 8;
     settings.enable_path_tracing = true;
     PathTracer path_tracer(settings);
-
-    // Set up lighting
-    LightManager& light_manager = path_tracer.getLightManager();
     
-    // Add a directional light (like sun)
-    light_manager.addDirectionalLight(
-        glm::vec3(-1.0f, -1.0f, -1.0f), // Direction: top-right-front to bottom-left-back
-        glm::vec3(1.0f, 0.95f, 0.8f),  // Warm white color
-        2.0f                           // Intensity
-    );
-    
-    // Add a point light above the scene
-    light_manager.addPointLight(
-        glm::vec3(1.5f, 2.0f, 1.5f),  // Position above and to the side
-        glm::vec3(0.8f, 0.9f, 1.0f),  // Cool white color
-        8.0f                           // Intensity
-    );
+    // Setup lights
+    setupPathTracerWithLights(path_tracer);
 
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-
-    // Ensure correct row alignment for 3-byte RGB data
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // Initialize OpenGL texture
+    GLuint texture = initializeGLTexture();
 
     // Allocate image buffer (RGB format)
     std::vector<unsigned char> image(IMAGE_WIDTH * IMAGE_HEIGHT * 3);
@@ -197,24 +231,10 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
         // Increment sample count
         g_accumulated_samples++;
 
-        // Calculate tile dimensions
-        int numTilesX = (IMAGE_WIDTH + TILE_SIZE - 1) / TILE_SIZE;
-        int numTilesY = (IMAGE_HEIGHT + TILE_SIZE - 1) / TILE_SIZE;
-        int totalTiles = numTilesX * numTilesY;
-        
-        // Reset progress counter
-        g_tiles_completed = 0;
-        
-        // Parallel tile rendering using TBB
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, totalTiles), 
-            [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t i = range.begin(); i < range.end(); i++) {
-                    PathTracer::renderTileTask((int)i, 0, image, IMAGE_WIDTH, IMAGE_HEIGHT, 
-                                              camera, scene, path_tracer, numTilesX, numTilesY,
-                                              g_accumulation_buffer, g_accumulated_samples,
-                                              g_camera_moved, g_tiles_completed);
-                }
-            });
+        // Render image using PathTracer's parallel processing
+        path_tracer.renderImage(image, IMAGE_WIDTH, IMAGE_HEIGHT, camera, scene,
+                               g_accumulation_buffer, g_accumulated_samples,
+                               g_camera_moved, g_tiles_completed);
         
         // Show accumulation progress
         if (g_accumulated_samples == 1) {
@@ -223,23 +243,8 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
             std::cout << "\nFrame " << g_accumulated_samples << " completed (accumulating)                    \n" << std::flush;
         }
 
-        // Upload texture
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, IMAGE_WIDTH, IMAGE_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, image.data());
-
-        // Render
-        glClear(GL_COLOR_BUFFER_BIT);
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, texture);
-
-        glBegin(GL_QUADS);
-        // Flip top/bottom vertex positions as requested (invert Y for each vertex)
-        // Texture coordinates remain the same; only vertex positions swap vertically.
-        glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, 1.0f);
-        glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, 1.0f);
-        glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, -1.0f);
-        glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, -1.0f);
-        glEnd();
-
+        // Render to OpenGL
+        renderGLFrame(texture, image);
         glfwSwapBuffers(window);
     }
 
