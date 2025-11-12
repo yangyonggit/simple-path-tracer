@@ -14,11 +14,17 @@ Camera::Camera(const glm::vec3& position,
     , m_aspect_ratio(aspect_ratio)
     , m_movement_speed(2.5f)
     , m_mouse_sensitivity(0.1f)
+    , m_first_movement_check(true)
 {
     // Calculate initial yaw and pitch from position and target
     glm::vec3 direction = glm::normalize(target - position);
     m_yaw = glm::degrees(atan2(direction.z, direction.x));
     m_pitch = glm::degrees(asin(direction.y));
+    
+    // Initialize movement tracking
+    m_last_position = position;
+    m_last_yaw = m_yaw;
+    m_last_pitch = m_pitch;
     
     updateCameraVectors();
 }
@@ -102,4 +108,30 @@ glm::vec3 Camera::getRayDirection(float x, float y) const {
 void Camera::setAspectRatio(float aspect_ratio) {
     m_aspect_ratio = aspect_ratio;
     updateCameraVectors();
+}
+
+bool Camera::hasMovedSinceLastCheck(float position_threshold, float rotation_threshold) {
+    if (m_first_movement_check) {
+        m_first_movement_check = false;
+        return true; // Always consider first check as movement
+    }
+    
+    bool moved = (glm::length(m_position - m_last_position) > position_threshold) ||
+                 (abs(m_yaw - m_last_yaw) > rotation_threshold) ||
+                 (abs(m_pitch - m_last_pitch) > rotation_threshold);
+    
+    if (moved) {
+        m_last_position = m_position;
+        m_last_yaw = m_yaw;
+        m_last_pitch = m_pitch;
+    }
+    
+    return moved;
+}
+
+void Camera::resetMovementTracking() {
+    m_last_position = m_position;
+    m_last_yaw = m_yaw;
+    m_last_pitch = m_pitch;
+    m_first_movement_check = false;
 }

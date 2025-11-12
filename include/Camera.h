@@ -26,6 +26,12 @@ private:
     float m_movement_speed;
     float m_mouse_sensitivity;
     
+    // Movement detection
+    glm::vec3 m_last_position;
+    float m_last_yaw;
+    float m_last_pitch;
+    bool m_first_movement_check;
+    
     void updateCameraVectors();
     
 public:
@@ -52,6 +58,10 @@ public:
     const glm::vec3& getUp() const { return m_camera_up; }
     float getYaw() const { return m_yaw; }
     float getPitch() const { return m_pitch; }
+    
+    // Movement detection
+    bool hasMovedSinceLastCheck(float position_threshold = 0.001f, float rotation_threshold = 0.1f);
+    void resetMovementTracking();
     
     void setAspectRatio(float aspect_ratio);
     

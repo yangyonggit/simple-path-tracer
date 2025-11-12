@@ -51,4 +51,11 @@ public:
     
     // Utility functions
     static void initializeRandomSeed();
+    
+    // Tile rendering function
+    static void renderTileTask(int tileIndex, int threadIndex, std::vector<unsigned char>& pixels,
+                              int width, int height, const class Camera& camera, RTCScene scene,
+                              const PathTracer& pathTracer, int numTilesX, int numTilesY,
+                              std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples,
+                              bool camera_moved, std::atomic<int>& tiles_completed);
 };

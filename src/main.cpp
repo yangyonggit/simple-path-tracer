@@ -25,6 +25,11 @@ const int TILE_SIZE = 64;
 // Progress tracking
 std::atomic<int> g_tiles_completed{0};
 
+// Accumulation variables
+std::vector<glm::vec3> g_accumulation_buffer; // High precision accumulation
+int g_accumulated_samples = 0;
+bool g_camera_moved = true;
+
 // Input state
 bool keys[1024] = {false};
 
@@ -85,52 +90,6 @@ void processInput() {
         g_camera->processKeyboard(Camera::LEFT, deltaTime);
     if (keys[GLFW_KEY_D])
         g_camera->processKeyboard(Camera::RIGHT, deltaTime);
-}
-
-// Render a single tile using TBB
-void renderTileTask(int tileIndex, int threadIndex, std::vector<unsigned char>& pixels, 
-                   int width, int height, const Camera& camera, RTCScene scene, 
-                   const PathTracer& pathTracer, int numTilesX, int numTilesY) {
-    // Calculate tile coordinates
-    int tileX = tileIndex % numTilesX;
-    int tileY = tileIndex / numTilesX;
-    
-    int x0 = tileX * TILE_SIZE;
-    int y0 = tileY * TILE_SIZE;
-    int x1 = std::min(x0 + TILE_SIZE, width);
-    int y1 = std::min(y0 + TILE_SIZE, height);
-    
-    // Render pixels in this tile
-    for (int y = y0; y < y1; y++) {
-        for (int x = x0; x < x1; x++) {
-            // Calculate normalized pixel coordinates
-            float u = float(x) / float(width);
-            float v = float(y) / float(height);
-            
-            // Get ray direction from camera
-            glm::vec3 ray_dir = camera.getRayDirection(u, v);
-            
-            // Trace ray using PathTracer
-            glm::vec3 color = pathTracer.traceRay(scene, camera.getPosition(), ray_dir);
-            
-            // Clamp color to valid range
-            color = glm::clamp(color, 0.0f, 1.0f);
-            
-            // Convert to 8-bit color and store in image
-            int pixel_index = (y * width + x) * 3;
-            pixels[pixel_index + 0] = static_cast<unsigned char>(color.r * 255); // R
-            pixels[pixel_index + 1] = static_cast<unsigned char>(color.g * 255); // G
-            pixels[pixel_index + 2] = static_cast<unsigned char>(color.b * 255); // B
-        }
-    }
-    
-    // Update progress atomically
-    int completed = ++g_tiles_completed;
-    if (completed % 8 == 0) { // Show progress every 8 tiles
-        int total = numTilesX * numTilesY;
-        std::cout << "Rendered " << completed << "/" << total << " tiles (" 
-                 << int(100.0f * completed / total) << "%)\r" << std::flush;
-    }
 }
 
 // Function to initialize OpenGL and create a window
@@ -194,6 +153,10 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
 
     // Allocate image buffer (RGB format)
     std::vector<unsigned char> image(IMAGE_WIDTH * IMAGE_HEIGHT * 3);
+    
+    // Initialize accumulation buffer
+    g_accumulation_buffer.resize(IMAGE_WIDTH * IMAGE_HEIGHT, glm::vec3(0.0f));
+    g_accumulated_samples = 0;
 
     while (!glfwWindowShouldClose(window)) {
         // Calculate deltaTime
@@ -204,6 +167,18 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
         // Process input
         glfwPollEvents();
         processInput();
+
+        // Check if camera has moved using Camera class method
+        g_camera_moved = camera.hasMovedSinceLastCheck();
+        
+        if (g_camera_moved) {
+            // Reset accumulation when camera moves
+            g_accumulated_samples = 0;
+            std::fill(g_accumulation_buffer.begin(), g_accumulation_buffer.end(), glm::vec3(0.0f));
+        }
+        
+        // Increment sample count
+        g_accumulated_samples++;
 
         // Calculate tile dimensions
         int numTilesX = (IMAGE_WIDTH + TILE_SIZE - 1) / TILE_SIZE;
@@ -217,12 +192,19 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
         tbb::parallel_for(tbb::blocked_range<size_t>(0, totalTiles), 
             [&](const tbb::blocked_range<size_t>& range) {
                 for (size_t i = range.begin(); i < range.end(); i++) {
-                    renderTileTask((int)i, 0, image, IMAGE_WIDTH, IMAGE_HEIGHT, 
-                                  camera, scene, path_tracer, numTilesX, numTilesY);
+                    PathTracer::renderTileTask((int)i, 0, image, IMAGE_WIDTH, IMAGE_HEIGHT, 
+                                              camera, scene, path_tracer, numTilesX, numTilesY,
+                                              g_accumulation_buffer, g_accumulated_samples,
+                                              g_camera_moved, g_tiles_completed);
                 }
             });
         
-        std::cout << "\nFrame completed                    \n" << std::flush;
+        // Show accumulation progress
+        if (g_accumulated_samples == 1) {
+            std::cout << "\nFrame " << g_accumulated_samples << " completed (new view)                    \n" << std::flush;
+        } else {
+            std::cout << "\nFrame " << g_accumulated_samples << " completed (accumulating)                    \n" << std::flush;
+        }
 
         // Upload texture
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, IMAGE_WIDTH, IMAGE_HEIGHT, 0, GL_RGB, GL_UNSIGNED_BYTE, image.data());
@@ -277,9 +259,10 @@ int main() {
     g_camera = &camera;
 
     std::cout << "OpenGL initialized. Starting real-time rendering with camera controls...\n";
-    std::cout << "Rendering mode: Monte Carlo Path Tracing (TBB Parallel)\n";
+    std::cout << "Rendering mode: Monte Carlo Path Tracing (TBB Parallel + Accumulation)\n";
     std::cout << "Path tracing settings: 16 samples/pixel, max depth 8\n";
     std::cout << "Parallel processing: Intel TBB with " << TILE_SIZE << "x" << TILE_SIZE << " tiles\n";
+    std::cout << "Accumulation: Progressive sampling when camera is stationary\n";
     std::cout << "Controls: WASD to move, mouse to look around, ESC to exit\n";
 
     // Render the scene with real-time camera control

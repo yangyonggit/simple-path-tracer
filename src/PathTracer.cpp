@@ -1,7 +1,11 @@
 #include "PathTracer.h"
+#include "Camera.h"
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <vector>
+#include <atomic>
+#include <iostream>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -209,4 +213,66 @@ glm::vec3 PathTracer::traceRay(RTCScene scene, const glm::vec3& origin,
     color = glm::sqrt(color);
     
     return color;
+}
+
+void PathTracer::renderTileTask(int tileIndex, int threadIndex, std::vector<unsigned char>& pixels,
+                               int width, int height, const Camera& camera, RTCScene scene,
+                               const PathTracer& pathTracer, int numTilesX, int numTilesY,
+                               std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples,
+                               bool camera_moved, std::atomic<int>& tiles_completed) {
+    const int TILE_SIZE = 64;  // Match the tile size from main.cpp
+    
+    // Calculate tile coordinates
+    int tileX = tileIndex % numTilesX;
+    int tileY = tileIndex / numTilesX;
+    
+    int x0 = tileX * TILE_SIZE;
+    int y0 = tileY * TILE_SIZE;
+    int x1 = std::min(x0 + TILE_SIZE, width);
+    int y1 = std::min(y0 + TILE_SIZE, height);
+    
+    // Render pixels in this tile
+    for (int y = y0; y < y1; y++) {
+        for (int x = x0; x < x1; x++) {
+            // Calculate normalized pixel coordinates
+            float u = float(x) / float(width);
+            float v = float(y) / float(height);
+            
+            // Get ray direction from camera
+            glm::vec3 ray_dir = camera.getRayDirection(u, v);
+            
+            // Trace ray using PathTracer
+            glm::vec3 color = pathTracer.traceRay(scene, camera.getPosition(), ray_dir);
+            
+            int pixel_index = y * width + x;
+            
+            if (camera_moved) {
+                // Camera moved - start new accumulation
+                accumulation_buffer[pixel_index] = color;
+            } else {
+                // Camera stationary - accumulate samples
+                accumulation_buffer[pixel_index] += color;
+            }
+            
+            // Get averaged color for display
+            glm::vec3 averaged_color = accumulation_buffer[pixel_index] / float(accumulated_samples);
+            
+            // Clamp color to valid range
+            averaged_color = glm::clamp(averaged_color, 0.0f, 1.0f);
+            
+            // Convert to 8-bit color and store in image
+            int rgb_index = pixel_index * 3;
+            pixels[rgb_index + 0] = static_cast<unsigned char>(averaged_color.r * 255); // R
+            pixels[rgb_index + 1] = static_cast<unsigned char>(averaged_color.g * 255); // G
+            pixels[rgb_index + 2] = static_cast<unsigned char>(averaged_color.b * 255); // B
+        }
+    }
+    
+    // Update progress atomically
+    int completed = ++tiles_completed;
+    if (completed % 8 == 0) { // Show progress every 8 tiles
+        int total = numTilesX * numTilesY;
+        std::cout << "Rendered " << completed << "/" << total << " tiles (" 
+                 << int(100.0f * completed / total) << "%)\r" << std::flush;
+    }
 }
