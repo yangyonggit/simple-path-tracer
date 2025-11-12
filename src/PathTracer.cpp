@@ -201,7 +201,7 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
         float cos_theta = glm::max(glm::dot(normal, light_direction), 0.0f);
         if (cos_theta > 0.0f) {
             // Check for shadows
-            bool occluded = light->isOccluded(hit_point, light_direction, light_distance, scene);
+            bool occluded = light->isOccluded(hit_point, normal, light_direction, light_distance, scene);
             if (!occluded) {
                 // Use Cook-Torrance BRDF for realistic shading
                 glm::vec3 brdf = material.evaluateBRDF(normal, view_dir, light_direction);
@@ -313,7 +313,7 @@ glm::vec3 PathTracer::traceRaySimple(RTCScene scene, const glm::vec3& origin,
         float cos_theta = glm::max(glm::dot(normal, light_direction), 0.0f);
         if (cos_theta > 0.0f) {
             // Check for shadows
-            bool occluded = light->isOccluded(hit_point, light_direction, light_distance, scene);
+            bool occluded = light->isOccluded(hit_point, normal, light_direction, light_distance, scene);
             if (!occluded) {
                 // Use Cook-Torrance BRDF
                 glm::vec3 brdf = material.evaluateBRDF(normal, view_dir, light_direction);

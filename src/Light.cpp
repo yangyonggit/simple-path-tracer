@@ -12,19 +12,23 @@ Light::Light(Type type, const glm::vec3& color, float intensity)
     : m_type(type), m_color(color), m_intensity(intensity) {
 }
 
-bool Light::isOccluded(const glm::vec3& hit_point, const glm::vec3& light_dir, 
-                      float light_distance, RTCScene scene) const {
+bool Light::isOccluded(const glm::vec3& hit_point, const glm::vec3& normal,
+                      const glm::vec3& light_dir, float light_distance, RTCScene scene) const {
     RTCRay shadow_ray;
     
+    // Offset the ray origin along the surface normal to avoid self-intersection
+    const float epsilon = 0.001f;
+    glm::vec3 offset_origin = hit_point + normal * epsilon;
+    
     // Set up shadow ray
-    shadow_ray.org_x = hit_point.x;
-    shadow_ray.org_y = hit_point.y;
-    shadow_ray.org_z = hit_point.z;
+    shadow_ray.org_x = offset_origin.x;
+    shadow_ray.org_y = offset_origin.y;
+    shadow_ray.org_z = offset_origin.z;
     shadow_ray.dir_x = light_dir.x;
     shadow_ray.dir_y = light_dir.y;
     shadow_ray.dir_z = light_dir.z;
-    shadow_ray.tnear = 0.001f; // Small offset to avoid self-intersection
-    shadow_ray.tfar = light_distance - 0.001f; // Stop just before light
+    shadow_ray.tnear = 0.0f; // Start from offset origin
+    shadow_ray.tfar = light_distance - epsilon; // Stop just before light
     shadow_ray.mask = 0xFFFFFFFF;
     shadow_ray.flags = 0;
     
@@ -102,7 +106,7 @@ glm::vec3 LightManager::calculateDirectLighting(const glm::vec3& hit_point, cons
         
         if (cos_theta > 0.0f) {
             // Check for shadows (occlusion)
-            bool occluded = light->isOccluded(hit_point, light_direction, light_distance, scene);
+            bool occluded = light->isOccluded(hit_point, normal, light_direction, light_distance, scene);
             
             if (!occluded) {
                 // Lambertian BRDF: albedo / π

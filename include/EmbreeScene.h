@@ -7,6 +7,13 @@ private:
     RTCDevice m_device;
     RTCScene m_scene;
     
+    // Sphere parameters for user-defined geometry
+    struct SphereData {
+        float center_x, center_y, center_z;
+        float radius;
+    };
+    SphereData m_sphere_data;
+    
 public:
     EmbreeScene();
     ~EmbreeScene();
@@ -30,4 +37,9 @@ private:
     void addCube();
     void addSphere();
     void cleanup();
+    
+    // User-defined geometry callbacks
+    static void sphereIntersectFunc(const RTCIntersectFunctionNArguments* args);
+    static void sphereOccludedFunc(const RTCOccludedFunctionNArguments* args);
+    static void sphereBoundsFunc(const RTCBoundsFunctionArguments* args);
 };

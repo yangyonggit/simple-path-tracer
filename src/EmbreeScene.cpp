@@ -1,6 +1,7 @@
 #include "EmbreeScene.h"
 #include <iostream>
 #include <cmath>
+#include <cassert>
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -64,10 +65,10 @@ void EmbreeScene::addGroundPlane() {
     unsigned* indices = (unsigned*)rtcSetNewGeometryBuffer(geometry,
         RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, 3 * sizeof(unsigned), 2);
     
-    // Triangle 1: vertices 0, 1, 2
-    indices[0] = 0; indices[1] = 1; indices[2] = 2;
-    // Triangle 2: vertices 0, 2, 3
-    indices[3] = 0; indices[4] = 2; indices[5] = 3;
+    // Triangle 1: vertices 0, 2, 1 (counter-clockwise from above for upward normal)
+    indices[0] = 0; indices[1] = 2; indices[2] = 1;
+    // Triangle 2: vertices 0, 3, 2 (counter-clockwise from above for upward normal)
+    indices[3] = 0; indices[4] = 3; indices[5] = 2;
 
     // Commit geometry and attach to scene
     rtcCommitGeometry(geometry);
@@ -138,18 +139,19 @@ void EmbreeScene::addCube() {
     float cube_size = 0.4f;
     float cube_height = 0.8f;
     float pos_x = 1.0f; // Position to the right
+    float pos_z = 0.0f; // Center Z position
     
     // Bottom face vertices  
-    vertices[0] = pos_x - cube_size; vertices[1] = -1.0f; vertices[2] = -cube_size;  // 0
-    vertices[3] = pos_x + cube_size; vertices[4] = -1.0f; vertices[5] = -cube_size;  // 1
-    vertices[6] = pos_x + cube_size; vertices[7] = -1.0f; vertices[8] = cube_size;   // 2
-    vertices[9] = pos_x - cube_size; vertices[10] = -1.0f; vertices[11] = cube_size; // 3
+    vertices[0] = pos_x - cube_size; vertices[1] = -1.0f; vertices[2] = pos_z - cube_size;  // 0
+    vertices[3] = pos_x + cube_size; vertices[4] = -1.0f; vertices[5] = pos_z - cube_size;  // 1
+    vertices[6] = pos_x + cube_size; vertices[7] = -1.0f; vertices[8] = pos_z + cube_size;   // 2
+    vertices[9] = pos_x - cube_size; vertices[10] = -1.0f; vertices[11] = pos_z + cube_size; // 3
     
     // Top face vertices
-    vertices[12] = pos_x - cube_size; vertices[13] = -1.0f + cube_height; vertices[14] = -cube_size; // 4
-    vertices[15] = pos_x + cube_size; vertices[16] = -1.0f + cube_height; vertices[17] = -cube_size; // 5
-    vertices[18] = pos_x + cube_size; vertices[19] = -1.0f + cube_height; vertices[20] = cube_size;  // 6
-    vertices[21] = pos_x - cube_size; vertices[22] = -1.0f + cube_height; vertices[23] = cube_size;  // 7
+    vertices[12] = pos_x - cube_size; vertices[13] = -1.0f + cube_height; vertices[14] = pos_z - cube_size; // 4
+    vertices[15] = pos_x + cube_size; vertices[16] = -1.0f + cube_height; vertices[17] = pos_z - cube_size; // 5
+    vertices[18] = pos_x + cube_size; vertices[19] = -1.0f + cube_height; vertices[20] = pos_z + cube_size;  // 6
+    vertices[21] = pos_x - cube_size; vertices[22] = -1.0f + cube_height; vertices[23] = pos_z + cube_size;  // 7
 
     unsigned* indices = (unsigned*)rtcSetNewGeometryBuffer(geometry,
         RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, 3 * sizeof(unsigned), 12);
@@ -180,63 +182,24 @@ void EmbreeScene::addCube() {
 }
 
 void EmbreeScene::addSphere() {
-    // Create a sphere using triangulated mesh
-    RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_TRIANGLE);
+    // Create a user-defined geometry for analytical sphere
+    RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_USER);
     
-    const int segments = 20; // Number of horizontal and vertical segments
-    const int num_vertices = (segments + 1) * (segments + 1);
-    const int num_triangles = segments * segments * 2;
+    // Set sphere parameters - align with cube on X axis
+    m_sphere_data.center_x = -0.0f;
+    m_sphere_data.center_y = -1.0f + 0.3f; // Sitting on ground with radius 0.3f
+    m_sphere_data.center_z = -1.5f;
+    m_sphere_data.radius = 0.3f;
     
-    float* vertices = (float*)rtcSetNewGeometryBuffer(geometry, 
-        RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3, 3 * sizeof(float), num_vertices);
+    // Set user data
+    rtcSetGeometryUserData(geometry, &m_sphere_data);
     
-    float sphere_radius = 0.3f;
-    float pos_x = 0.0f;
-    float pos_y = -1.0f + sphere_radius; // Sitting on ground
-    float pos_z = 1.5f; // Position in front
+    // Set callback functions
+    rtcSetGeometryUserPrimitiveCount(geometry, 1);
+    rtcSetGeometryIntersectFunction(geometry, sphereIntersectFunc);
+    rtcSetGeometryOccludedFunction(geometry, sphereOccludedFunc);
+    rtcSetGeometryBoundsFunction(geometry, sphereBoundsFunc, nullptr);
     
-    // Generate sphere vertices
-    int vertex_idx = 0;
-    for (int i = 0; i <= segments; ++i) {
-        float phi = M_PI * float(i) / float(segments); // Vertical angle
-        for (int j = 0; j <= segments; ++j) {
-            float theta = 2.0f * M_PI * float(j) / float(segments); // Horizontal angle
-            
-            float x = sphere_radius * std::sin(phi) * std::cos(theta);
-            float y = sphere_radius * std::cos(phi);
-            float z = sphere_radius * std::sin(phi) * std::sin(theta);
-            
-            vertices[vertex_idx * 3 + 0] = pos_x + x;
-            vertices[vertex_idx * 3 + 1] = pos_y + y;
-            vertices[vertex_idx * 3 + 2] = pos_z + z;
-            vertex_idx++;
-        }
-    }
-    
-    // Generate sphere indices
-    unsigned* indices = (unsigned*)rtcSetNewGeometryBuffer(geometry,
-        RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, 3 * sizeof(unsigned), num_triangles);
-    
-    int triangle_idx = 0;
-    for (int i = 0; i < segments; ++i) {
-        for (int j = 0; j < segments; ++j) {
-            int curr_row = i * (segments + 1);
-            int next_row = (i + 1) * (segments + 1);
-            
-            // First triangle
-            indices[triangle_idx * 3 + 0] = curr_row + j;
-            indices[triangle_idx * 3 + 1] = next_row + j;
-            indices[triangle_idx * 3 + 2] = curr_row + j + 1;
-            triangle_idx++;
-            
-            // Second triangle
-            indices[triangle_idx * 3 + 0] = curr_row + j + 1;
-            indices[triangle_idx * 3 + 1] = next_row + j;
-            indices[triangle_idx * 3 + 2] = next_row + j + 1;
-            triangle_idx++;
-        }
-    }
-
     rtcCommitGeometry(geometry);
     rtcAttachGeometry(m_scene, geometry);
     rtcReleaseGeometry(geometry);
@@ -251,4 +214,133 @@ void EmbreeScene::cleanup() {
         rtcReleaseDevice(m_device);
         m_device = nullptr;
     }
+}
+
+// User-defined geometry callbacks for analytical sphere intersection
+void EmbreeScene::sphereIntersectFunc(const RTCIntersectFunctionNArguments* args) {
+    int* valid = args->valid;
+    void* ptr = args->geometryUserPtr;
+    RTCRayHit* rayhit = (RTCRayHit*)args->rayhit;
+    unsigned int primID = args->primID;
+    
+    assert(args->N == 1);
+    const SphereData* sphere = (const SphereData*)ptr;
+    
+    if (!valid[0]) return;
+    
+    // Ray-sphere intersection using quadratic formula
+    // Ray: P = O + t*D
+    // Sphere: |P - C|² = r²
+    // Substituting: |O + t*D - C|² = r²
+    
+    RTCRay* ray = &rayhit->ray;
+    RTCHit* hit = &rayhit->hit;
+    
+    // Vector from ray origin to sphere center
+    float oc_x = ray->org_x - sphere->center_x;
+    float oc_y = ray->org_y - sphere->center_y;
+    float oc_z = ray->org_z - sphere->center_z;
+    
+    // Quadratic equation coefficients: a*t² + b*t + c = 0
+    float a = ray->dir_x * ray->dir_x + ray->dir_y * ray->dir_y + ray->dir_z * ray->dir_z;
+    float b = 2.0f * (oc_x * ray->dir_x + oc_y * ray->dir_y + oc_z * ray->dir_z);
+    float c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - sphere->radius * sphere->radius;
+    
+    // Discriminant
+    float discriminant = b * b - 4.0f * a * c;
+    
+    if (discriminant < 0.0f) return; // No intersection
+    
+    // Calculate the two possible intersection distances
+    float sqrt_discriminant = std::sqrt(discriminant);
+    float t1 = (-b - sqrt_discriminant) / (2.0f * a);
+    float t2 = (-b + sqrt_discriminant) / (2.0f * a);
+    
+    // Choose the nearest intersection within valid range
+    float t = -1.0f;
+    if (t1 > ray->tnear && t1 < ray->tfar) {
+        t = t1;
+    } else if (t2 > ray->tnear && t2 < ray->tfar) {
+        t = t2;
+    }
+    
+    if (t > 0.0f && t < ray->tfar) {
+        // Update hit information
+        ray->tfar = t;
+        hit->primID = primID;
+        hit->geomID = args->geomID;
+        
+        // Calculate hit point
+        float hit_x = ray->org_x + t * ray->dir_x;
+        float hit_y = ray->org_y + t * ray->dir_y;
+        float hit_z = ray->org_z + t * ray->dir_z;
+        
+        // Calculate normal (hit point - sphere center) / radius
+        hit->Ng_x = (hit_x - sphere->center_x) / sphere->radius;
+        hit->Ng_y = (hit_y - sphere->center_y) / sphere->radius;
+        hit->Ng_z = (hit_z - sphere->center_z) / sphere->radius;
+        
+        // Set UV coordinates (simple spherical mapping)
+        float nx = hit->Ng_x;
+        float ny = hit->Ng_y;
+        float nz = hit->Ng_z;
+        
+        hit->u = 0.5f + std::atan2(nz, nx) / (2.0f * M_PI);
+        hit->v = 0.5f - std::asin(ny) / M_PI;
+    }
+}
+
+void EmbreeScene::sphereOccludedFunc(const RTCOccludedFunctionNArguments* args) {
+    const int* valid = args->valid;
+    void* ptr = args->geometryUserPtr;
+    RTCRay* ray = (RTCRay*)args->ray;
+    unsigned int primID = args->primID;
+    
+    assert(args->N == 1);
+    const SphereData* sphere = (const SphereData*)ptr;
+    
+    if (!valid[0]) return;
+    
+    // Ray-sphere intersection logic for occlusion test
+    float oc_x = ray->org_x - sphere->center_x;
+    float oc_y = ray->org_y - sphere->center_y;
+    float oc_z = ray->org_z - sphere->center_z;
+    
+    float a = ray->dir_x * ray->dir_x + ray->dir_y * ray->dir_y + ray->dir_z * ray->dir_z;
+    float b = 2.0f * (oc_x * ray->dir_x + oc_y * ray->dir_y + oc_z * ray->dir_z);
+    float c = oc_x * oc_x + oc_y * oc_y + oc_z * oc_z - sphere->radius * sphere->radius;
+    
+    float discriminant = b * b - 4.0f * a * c;
+    
+    if (discriminant >= 0.0f) {
+        float sqrt_discriminant = std::sqrt(discriminant);
+        float t1 = (-b - sqrt_discriminant) / (2.0f * a);
+        float t2 = (-b + sqrt_discriminant) / (2.0f * a);
+        
+        // Find the closest valid intersection
+        float t = -1.0f;
+        if (t1 > ray->tnear && t1 < ray->tfar) {
+            t = t1;
+        } else if (t2 > ray->tnear && t2 < ray->tfar) {
+            t = t2;
+        }
+        
+        if (t > 0.0f) {
+            // Set tfar to indicate occlusion (Embree convention)
+            ray->tfar = -1.0f;
+        }
+    }
+}
+
+void EmbreeScene::sphereBoundsFunc(const RTCBoundsFunctionArguments* args) {
+    const SphereData* sphere = (const SphereData*)args->geometryUserPtr;
+    RTCBounds* bounds_o = args->bounds_o;
+    
+    // Set bounding box for the sphere
+    bounds_o->lower_x = sphere->center_x - sphere->radius;
+    bounds_o->lower_y = sphere->center_y - sphere->radius;
+    bounds_o->lower_z = sphere->center_z - sphere->radius;
+    bounds_o->upper_x = sphere->center_x + sphere->radius;
+    bounds_o->upper_y = sphere->center_y + sphere->radius;
+    bounds_o->upper_z = sphere->center_z + sphere->radius;
 }

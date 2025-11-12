@@ -28,8 +28,8 @@ public:
                                   glm::vec3& light_direction, float& distance) const = 0;
     
     // Check if light is occluded by scene geometry
-    virtual bool isOccluded(const glm::vec3& hit_point, const glm::vec3& light_dir, 
-                           float light_distance, RTCScene scene) const;
+    virtual bool isOccluded(const glm::vec3& hit_point, const glm::vec3& normal,
+                           const glm::vec3& light_dir, float light_distance, RTCScene scene) const;
 
     // Accessors
     Type getType() const { return m_type; }
