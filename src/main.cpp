@@ -4,6 +4,7 @@
 #include <memory>
 #include "Camera.h"
 #include "EmbreeScene.h"
+#include "PathTracer.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -77,62 +78,6 @@ void processInput() {
         g_camera->processKeyboard(Camera::RIGHT, deltaTime);
 }
 
-// Function to get color based on geometry ID
-glm::vec3 getColorFromGeometryID(int geomID) {
-    switch(geomID) {
-        case 0: return glm::vec3(0.8f, 0.8f, 0.8f); // Ground plane - Light gray
-        case 1: return glm::vec3(1.0f, 0.2f, 0.2f); // Test box - Red
-        case 2: return glm::vec3(0.2f, 1.0f, 0.2f); // Cube - Green
-        case 3: return glm::vec3(0.2f, 0.2f, 1.0f); // Sphere - Blue
-        default: return glm::vec3(0.0f, 0.0f, 0.0f); // Background - Black
-    }
-}
-
-// Function to trace a ray and return shaded color with Lambertian shading
-glm::vec3 traceRayWithShading(RTCScene scene, const glm::vec3& origin, const glm::vec3& direction) {
-    RTCRayHit rayhit;
-    
-    // Set ray origin and direction
-    rayhit.ray.org_x = origin.x;
-    rayhit.ray.org_y = origin.y;
-    rayhit.ray.org_z = origin.z;
-    rayhit.ray.dir_x = direction.x;
-    rayhit.ray.dir_y = direction.y;
-    rayhit.ray.dir_z = direction.z;
-    
-    // Set ray parameters
-    rayhit.ray.tnear = 0.0f;
-    rayhit.ray.tfar = std::numeric_limits<float>::infinity();
-    rayhit.ray.mask = 0xFFFFFFFF;
-    rayhit.ray.flags = 0;
-    rayhit.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-
-    // Perform ray intersection
-    rtcIntersect1(scene, &rayhit);
-
-    // If no hit, return background color
-    if (rayhit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-        return glm::vec3(0.0f, 0.0f, 0.0f); // Black background
-    }
-
-    // Get hit normal from Embree (geometric normal)
-    glm::vec3 normal(rayhit.hit.Ng_x, rayhit.hit.Ng_y, rayhit.hit.Ng_z);
-    normal = glm::normalize(normal);
-
-    // Define directional light direction (light comes FROM this direction)
-    glm::vec3 lightDir = glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f));
-
-    // Compute Lambertian diffuse intensity: max(dot(normal, -lightDir), 0)
-    // We use -lightDir because we want the direction TO the light source
-    float diffuseIntensity = glm::max(glm::dot(normal, -lightDir), 0.0f);
-
-    // Get base color from geometry ID
-    glm::vec3 baseColor = getColorFromGeometryID(rayhit.hit.geomID);
-
-    // Apply shading: multiply base color by diffuse intensity (white light)
-    return baseColor * diffuseIntensity;
-}
-
 // Function to initialize OpenGL and create a window
 GLFWwindow* initializeOpenGL(int width, int height) {
     if (!glfwInit()) {
@@ -175,6 +120,13 @@ GLFWwindow* initializeOpenGL(int width, int height) {
 
 // Function to render the image using OpenGL with real-time camera control
 void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
+    // Create PathTracer with default settings
+    PathTracer::Settings settings;
+    settings.samples_per_pixel = 16;
+    settings.max_depth = 8;
+    settings.enable_path_tracing = true;
+    PathTracer path_tracer(settings);
+
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -208,14 +160,23 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
                 // Get ray direction from camera
                 glm::vec3 ray_dir = camera.getRayDirection(u, v);
                 
-                // Trace ray and get shaded color with Lambertian shading
-                glm::vec3 color = traceRayWithShading(scene, camera.getPosition(), ray_dir);
+                // Trace ray using PathTracer
+                glm::vec3 color = path_tracer.traceRay(scene, camera.getPosition(), ray_dir);
+                
+                // Clamp color to valid range
+                color = glm::clamp(color, 0.0f, 1.0f);
                 
                 // Convert to 8-bit color and store in image
                 int pixel_index = (y * IMAGE_WIDTH + x) * 3;
                 image[pixel_index + 0] = static_cast<unsigned char>(color.r * 255); // R
                 image[pixel_index + 1] = static_cast<unsigned char>(color.g * 255); // G
                 image[pixel_index + 2] = static_cast<unsigned char>(color.b * 255); // B
+            }
+            
+            // Show progress every 10 rows since path tracing is slower
+            if (y % 10 == 0) {
+                std::cout << "Path tracing progress: " << y << "/" << IMAGE_HEIGHT << " rows (" 
+                         << int(100.0f * y / IMAGE_HEIGHT) << "%)\r" << std::flush;
             }
         }
 
@@ -272,6 +233,8 @@ int main() {
     g_camera = &camera;
 
     std::cout << "OpenGL initialized. Starting real-time rendering with camera controls...\n";
+    std::cout << "Rendering mode: Monte Carlo Path Tracing\n";
+    std::cout << "Path tracing settings: 16 samples/pixel, max depth 8\n";
     std::cout << "Controls: WASD to move, mouse to look around, ESC to exit\n";
 
     // Render the scene with real-time camera control
