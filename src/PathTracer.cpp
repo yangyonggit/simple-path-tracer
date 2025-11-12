@@ -1,6 +1,7 @@
 #include "PathTracer.h"
 #include "Camera.h"
 #include "Light.h"
+#include "Material.h"
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -19,6 +20,12 @@ thread_local std::mt19937 PathTracer::s_rng(std::random_device{}());
 thread_local std::uniform_real_distribution<float> PathTracer::s_uniform_dist(0.0f, 1.0f);
 
 PathTracer::PathTracer(const Settings& settings) : m_settings(settings) {
+    setupDefaultMaterials();
+    
+    // Try to load cubemap (should auto-detect cross layout)
+    if (!loadCubemap("assets/Cubemap/Cubemap_Sky_04-512x512.png")) {
+        std::cout << "Failed to load cubemap, using procedural sky" << std::endl;
+    }
 }
 
 void PathTracer::initializeRandomSeed() {
@@ -91,6 +98,41 @@ glm::vec3 PathTracer::getMaterialAlbedo(int geomID) {
     }
 }
 
+void PathTracer::setupDefaultMaterials() {
+    m_materials.clear();
+    
+    // Material 0: Ground plane - Concrete
+    m_materials.push_back(Materials::Concrete());
+    
+    // Material 1: Test box - Red plastic  
+    m_materials.push_back(Material(glm::vec3(0.8f, 0.2f, 0.2f), 0.0f, 0.4f));
+    
+    // Material 2: Cube - Copper metal
+    m_materials.push_back(Materials::Copper());
+    
+    // Material 3: Sphere - Gold metal
+    m_materials.push_back(Materials::Gold());
+}
+
+void PathTracer::setMaterial(int index, const Material& material) {
+    if (index >= 0 && index < m_materials.size()) {
+        m_materials[index] = material;
+    }
+}
+
+const Material& PathTracer::getMaterial(int index) const {
+    if (index >= 0 && index < m_materials.size()) {
+        return m_materials[index];
+    }
+    // Return default material if index is out of bounds
+    static Material defaultMaterial;
+    return defaultMaterial;
+}
+
+const Material& PathTracer::getMaterialByID(int geomID) const {
+    return getMaterial(geomID);
+}
+
 glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origin, 
                                          const glm::vec3& direction, int depth) const {
     // Stop if we've reached max depth
@@ -120,9 +162,7 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
 
     // If no hit, return background color (sky)
     if (rayhit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-        // Simple sky gradient
-        float t = 0.5f * (glm::normalize(direction).y + 1.0f);
-        return (1.0f - t) * glm::vec3(1.0f, 1.0f, 1.0f) + t * glm::vec3(0.5f, 0.7f, 1.0f);
+        return getCubemapColor(glm::normalize(direction));
     }
 
     // Calculate hit point
@@ -138,28 +178,78 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
     }
 
     // Get material properties
-    glm::vec3 albedo = getMaterialAlbedo(rayhit.hit.geomID);
+    const Material& material = getMaterialByID(rayhit.hit.geomID);
     
-    // Calculate direct lighting contribution using light manager
+    // Add emission if material is emissive
+    glm::vec3 emission = material.emission;
+    
+    // Calculate direct lighting contribution using PBR
     glm::vec3 view_dir = -direction; // Direction towards camera
-    glm::vec3 direct_lighting = m_light_manager.calculateDirectLighting(
-        hit_point, normal, view_dir, albedo, scene);
     
-    // Simple emission for light sources (none in this scene)
-    glm::vec3 emission = glm::vec3(0.0f, 0.0f, 0.0f);
+    glm::vec3 direct_lighting(0.0f);
+    const auto& lights = m_light_manager;
+    
+    // Sample all lights for direct lighting
+    for (size_t i = 0; i < lights.getLightCount(); ++i) {
+        const Light* light = lights.getLight(i);
+        if (!light) continue;
+        
+        glm::vec3 light_direction;
+        float light_distance;
+        glm::vec3 light_radiance = light->getRadiance(hit_point, normal, light_direction, light_distance);
+        
+        float cos_theta = glm::max(glm::dot(normal, light_direction), 0.0f);
+        if (cos_theta > 0.0f) {
+            // Check for shadows
+            bool occluded = light->isOccluded(hit_point, light_direction, light_distance, scene);
+            if (!occluded) {
+                // Use Cook-Torrance BRDF for realistic shading
+                glm::vec3 brdf = material.evaluateBRDF(normal, view_dir, light_direction);
+                direct_lighting += brdf * light_radiance;
+            }
+        }
+    }
     
     // Generate random direction using cosine-weighted hemisphere sampling
     glm::vec3 scatter_direction = cosineHemisphereSample(normal);
     
     // Recursive ray tracing for indirect lighting
-    glm::vec3 indirect_light = tracePathMonteCarlo(scene, hit_point, scatter_direction, depth - 1);
+    glm::vec3 indirect_light(0.0f);
+    glm::vec3 indirect_contribution(0.0f);
     
-    // BRDF for Lambertian diffuse: albedo / π
-    // The cosine term is already accounted for in the cosine-weighted sampling
-    // The π factor cancels out with the π in the Monte Carlo estimator
-    glm::vec3 indirect_contribution = albedo * indirect_light;
+    if (material.metallic > 0.5f) {
+        // Metals: Sample environment using reflection direction for better specular highlights
+        glm::vec3 reflect_dir = glm::reflect(-view_dir, normal);
+        
+        // Add some roughness-based perturbation for realistic metal reflection
+        if (material.roughness > 0.01f) {
+            glm::vec3 roughened_reflect = reflect_dir + randomUnitSphere() * material.roughness * 0.3f;
+            reflect_dir = glm::normalize(roughened_reflect);
+        }
+        
+        indirect_light = tracePathMonteCarlo(scene, hit_point, reflect_dir, depth - 1);
+        
+        // For metals, use simpler reflection model instead of full BRDF to avoid artifacts
+        // Metals mainly reflect the environment directly
+        glm::vec3 fresnel = material.getF0(); // Use material's F0 value
+        float ndotv = glm::max(glm::dot(normal, view_dir), 0.0f);
+        
+        // Simple fresnel approximation
+        glm::vec3 F = fresnel + (glm::vec3(1.0f) - fresnel) * pow(1.0f - ndotv, 5.0f);
+        
+        // Metal contribution - increase to make reflections more visible
+        indirect_contribution = F * indirect_light * 0.8f; // Increased from 0.4f to make reflections clearer
+        
+    } else {
+        // Dielectrics: Use standard diffuse sampling 
+        glm::vec3 scatter_direction = cosineHemisphereSample(normal);
+        indirect_light = tracePathMonteCarlo(scene, hit_point, scatter_direction, depth - 1);
+        
+        float indirect_strength = 3.14159f * 0.12f; // Slightly increased to balance with brighter metals
+        indirect_contribution = material.getDiffuseColor() * indirect_light * indirect_strength;
+    }
     
-    // Combine direct and indirect lighting
+    // Combine emission, direct lighting, and indirect lighting
     return emission + direct_lighting + indirect_contribution;
 }
 
@@ -187,8 +277,7 @@ glm::vec3 PathTracer::traceRaySimple(RTCScene scene, const glm::vec3& origin,
 
     // If no hit, return background color
     if (rayhit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-        float t = 0.5f * (glm::normalize(direction).y + 1.0f);
-        return (1.0f - t) * glm::vec3(1.0f, 1.0f, 1.0f) + t * glm::vec3(0.5f, 0.7f, 1.0f);
+        return getCubemapColor(glm::normalize(direction));
     }
 
     // Get hit normal from Embree (geometric normal)
@@ -201,17 +290,39 @@ glm::vec3 PathTracer::traceRaySimple(RTCScene scene, const glm::vec3& origin,
     }
 
     // Get material properties
-    glm::vec3 albedo = getMaterialAlbedo(rayhit.hit.geomID);
+    const Material& material = getMaterialByID(rayhit.hit.geomID);
     
     // Calculate hit point
     glm::vec3 hit_point = origin + rayhit.ray.tfar * direction;
     
-    // Use the new lighting system for direct lighting
+    // Use the new lighting system with PBR for direct lighting
     glm::vec3 view_dir = -direction; // Direction towards camera
-    glm::vec3 direct_lighting = m_light_manager.calculateDirectLighting(
-        hit_point, normal, view_dir, albedo, scene);
     
-    return direct_lighting;
+    glm::vec3 direct_lighting(0.0f);
+    const auto& lights = m_light_manager;
+    
+    // Sample all lights for direct lighting
+    for (size_t i = 0; i < lights.getLightCount(); ++i) {
+        const Light* light = lights.getLight(i);
+        if (!light) continue;
+        
+        glm::vec3 light_direction;
+        float light_distance;
+        glm::vec3 light_radiance = light->getRadiance(hit_point, normal, light_direction, light_distance);
+        
+        float cos_theta = glm::max(glm::dot(normal, light_direction), 0.0f);
+        if (cos_theta > 0.0f) {
+            // Check for shadows
+            bool occluded = light->isOccluded(hit_point, light_direction, light_distance, scene);
+            if (!occluded) {
+                // Use Cook-Torrance BRDF
+                glm::vec3 brdf = material.evaluateBRDF(normal, view_dir, light_direction);
+                direct_lighting += brdf * light_radiance;
+            }
+        }
+    }
+    
+    return material.emission + direct_lighting;
 }
 
 glm::vec3 PathTracer::traceRay(RTCScene scene, const glm::vec3& origin, 
@@ -321,5 +432,85 @@ void PathTracer::renderTileTask(int tileIndex, int threadIndex, std::vector<unsi
         int total = numTilesX * numTilesY;
         std::cout << "Rendered " << completed << "/" << total << " tiles (" 
                  << int(100.0f * completed / total) << "%)\r" << std::flush;
+    }
+}
+
+// Environment/Sky color implementation with enhanced environment mapping
+glm::vec3 PathTracer::getSkyColor(const glm::vec3& direction) {
+    // Normalized direction (should already be normalized)
+    glm::vec3 dir = glm::normalize(direction);
+    
+    // Sun position (slightly elevated, pointing from southeast)
+    glm::vec3 sun_direction = glm::normalize(glm::vec3(0.3f, 0.5f, -0.8f));
+    
+    // Calculate angle to sun
+    float sun_dot = glm::max(glm::dot(dir, sun_direction), 0.0f);
+    
+    // Base sky colors - very conservative to prevent artificial brightness
+    glm::vec3 horizon_color(0.6f, 0.55f, 0.5f);  // Subdued warm horizon
+    glm::vec3 zenith_color(0.2f, 0.35f, 0.6f);   // Gentle blue sky  
+    glm::vec3 sun_color(1.5f, 1.3f, 1.1f);       // Mild sun
+    glm::vec3 ground_color(0.08f, 0.06f, 0.04f); // Very subtle ground bounce
+    
+    // Sky gradient based on height
+    float t = 0.5f * (dir.y + 1.0f); // Map from [-1, 1] to [0, 1]
+    
+    if (dir.y > 0.0f) {
+        // Sky - blend from horizon to zenith
+        glm::vec3 sky_color = glm::mix(horizon_color, zenith_color, t * t);
+        
+        // Add environmental variation for better reflections (but keep it subtle)
+        // Create some directional variation to make reflections more interesting
+        float azimuth = atan2(dir.z, dir.x) / (2.0f * 3.14159f) + 0.5f; // [0, 1]
+        float variation = sin(azimuth * 8.0f) * 0.05f + sin(azimuth * 16.0f) * 0.02f; // Much smaller variation
+        sky_color *= (1.0f + variation);
+        
+        // Add sun disk
+        if (sun_dot > 0.998f) { // Very close to sun direction
+            float sun_intensity = (sun_dot - 0.998f) / 0.002f; // Normalize to [0, 1]
+            sky_color = glm::mix(sky_color, sun_color, sun_intensity);
+        }
+        // Add sun glow
+        else if (sun_dot > 0.95f) {
+            float glow_intensity = (sun_dot - 0.95f) / 0.048f; // Normalize to [0, 1]
+            glm::vec3 glow_color = glm::mix(horizon_color, sun_color * 0.3f, glow_intensity);
+            sky_color = glm::mix(sky_color, glow_color, glow_intensity * 0.5f);
+        }
+        
+        return sky_color;
+    } else {
+        // Below horizon - darker ground reflection with some variation
+        float ground_t = -dir.y; // How far below horizon
+        float azimuth_ground = atan2(dir.z, dir.x) / (2.0f * 3.14159f) + 0.5f;
+        float ground_variation = sin(azimuth_ground * 4.0f) * 0.05f;
+        glm::vec3 varied_ground = ground_color * (1.0f + ground_variation);
+        return glm::mix(horizon_color * 0.6f, varied_ground, ground_t * 0.7f);
+    }
+}
+
+bool PathTracer::loadCubemap(const std::string& filename) {
+    std::cout << "Loading cubemap: " << filename << std::endl;
+    return m_cubemap.loadFromFile(filename);
+}
+
+glm::vec3 PathTracer::getCubemapColor(const glm::vec3& direction) const {
+    if (m_cubemap.isLoaded()) {
+        // Use cubemap for realistic environment lighting
+        glm::vec3 color = m_cubemap.sample(direction);
+        
+        // Much milder tone mapping to preserve cubemap appearance
+        // First clamp extreme values only
+        color = glm::min(color, glm::vec3(5.0f)); // More reasonable clamp
+        
+        // Light exposure adjustment - keep most of original brightness
+        color *= 0.7f; // Mild reduction instead of 0.15
+        
+        // Optional light Reinhard if still too bright
+        // color = color / (color + glm::vec3(1.0f));
+        
+        return color;
+    } else {
+        // Fallback to procedural sky
+        return getSkyColor(direction);
     }
 }

@@ -6,6 +6,8 @@
 #include <vector>
 #include <atomic>
 #include "Light.h"
+#include "Material.h"
+#include "Cubemap.h"
 
 // Forward declaration
 class Camera;
@@ -23,6 +25,8 @@ public:
 private:
     Settings m_settings;
     LightManager m_light_manager;
+    std::vector<Material> m_materials;
+    Cubemap m_cubemap;
     
     // Random number generation (thread local)
     thread_local static std::mt19937 s_rng;
@@ -38,6 +42,17 @@ private:
     // Material functions
     static glm::vec3 getColorFromGeometryID(int geomID);
     static glm::vec3 getMaterialAlbedo(int geomID);
+    
+    // Material management (private helper)
+    const Material& getMaterialByID(int geomID) const;
+    void setupDefaultMaterials();
+    
+    // Environment/Sky functions
+    static glm::vec3 getSkyColor(const glm::vec3& direction);
+    glm::vec3 getCubemapColor(const glm::vec3& direction) const;
+    
+    // Cubemap management
+    bool loadCubemap(const std::string& filename);
     
     // Core tracing functions
     glm::vec3 tracePathMonteCarlo(RTCScene scene, const glm::vec3& origin, 
@@ -65,6 +80,12 @@ public:
     // Light management
     LightManager& getLightManager() { return m_light_manager; }
     const LightManager& getLightManager() const { return m_light_manager; }
+    
+    // Material management  
+    void addMaterial(const Material& material) { m_materials.push_back(material); }
+    void setMaterial(int index, const Material& material);
+    const Material& getMaterial(int index) const;
+    size_t getMaterialCount() const { return m_materials.size(); }
     
     // Utility functions
     static void initializeRandomSeed();

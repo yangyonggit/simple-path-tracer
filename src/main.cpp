@@ -104,12 +104,12 @@ void setupPathTracerWithLights(PathTracer& path_tracer) {
         2.0f                           // Intensity
     );
     
-    // Add a point light above the scene
-    light_manager.addPointLight(
-        glm::vec3(1.5f, 2.0f, 1.5f),  // Position above and to the side
-        glm::vec3(0.8f, 0.9f, 1.0f),  // Cool white color
-        8.0f                           // Intensity
-    );
+    // // Add a point light above the scene
+    // light_manager.addPointLight(
+    //     glm::vec3(1.5f, 2.0f, 1.5f),  // Position above and to the side
+    //     glm::vec3(0.8f, 0.9f, 1.0f),  // Cool white color
+    //     8.0f                           // Intensity
+    // );
 }
 
 // Initialize OpenGL texture and rendering setup
