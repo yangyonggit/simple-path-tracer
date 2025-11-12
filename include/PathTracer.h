@@ -3,6 +3,7 @@
 #include <embree4/rtcore.h>
 #include <glm/glm.hpp>
 #include <random>
+#include "Light.h"
 
 class PathTracer {
 public:
@@ -16,6 +17,7 @@ public:
 
 private:
     Settings m_settings;
+    LightManager m_light_manager;
     
     // Random number generation (thread local)
     thread_local static std::mt19937 s_rng;
@@ -48,6 +50,10 @@ public:
     // Settings management
     void setSettings(const Settings& settings) { m_settings = settings; }
     const Settings& getSettings() const { return m_settings; }
+    
+    // Light management
+    LightManager& getLightManager() { return m_light_manager; }
+    const LightManager& getLightManager() const { return m_light_manager; }
     
     // Utility functions
     static void initializeRandomSeed();

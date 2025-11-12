@@ -24,6 +24,7 @@ add_executable(${PROJECT_NAME}
     src/Camera.cpp 
     src/EmbreeScene.cpp
     src/PathTracer.cpp
+    src/Light.cpp
 )
 
 # Add include directories

@@ -141,6 +141,23 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
     settings.enable_path_tracing = true;
     PathTracer path_tracer(settings);
 
+    // Set up lighting
+    LightManager& light_manager = path_tracer.getLightManager();
+    
+    // Add a directional light (like sun)
+    light_manager.addDirectionalLight(
+        glm::vec3(-1.0f, -1.0f, -1.0f), // Direction: top-right-front to bottom-left-back
+        glm::vec3(1.0f, 0.95f, 0.8f),  // Warm white color
+        2.0f                           // Intensity
+    );
+    
+    // Add a point light above the scene
+    light_manager.addPointLight(
+        glm::vec3(1.5f, 2.0f, 1.5f),  // Position above and to the side
+        glm::vec3(0.8f, 0.9f, 1.0f),  // Cool white color
+        8.0f                           // Intensity
+    );
+
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);

@@ -1,5 +1,6 @@
 #include "PathTracer.h"
 #include "Camera.h"
+#include "Light.h"
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -137,6 +138,11 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
     // Get material properties
     glm::vec3 albedo = getMaterialAlbedo(rayhit.hit.geomID);
     
+    // Calculate direct lighting contribution using light manager
+    glm::vec3 view_dir = -direction; // Direction towards camera
+    glm::vec3 direct_lighting = m_light_manager.calculateDirectLighting(
+        hit_point, normal, view_dir, albedo, scene);
+    
     // Simple emission for light sources (none in this scene)
     glm::vec3 emission = glm::vec3(0.0f, 0.0f, 0.0f);
     
@@ -149,7 +155,10 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
     // BRDF for Lambertian diffuse: albedo / π
     // The cosine term is already accounted for in the cosine-weighted sampling
     // The π factor cancels out with the π in the Monte Carlo estimator
-    return emission + albedo * indirect_light;
+    glm::vec3 indirect_contribution = albedo * indirect_light;
+    
+    // Combine direct and indirect lighting
+    return emission + direct_lighting + indirect_contribution;
 }
 
 glm::vec3 PathTracer::traceRaySimple(RTCScene scene, const glm::vec3& origin, 
@@ -183,14 +192,24 @@ glm::vec3 PathTracer::traceRaySimple(RTCScene scene, const glm::vec3& origin,
     // Get hit normal from Embree (geometric normal)
     glm::vec3 normal(rayhit.hit.Ng_x, rayhit.hit.Ng_y, rayhit.hit.Ng_z);
     normal = glm::normalize(normal);
+    
+    // Make sure normal faces the incoming ray
+    if (glm::dot(normal, direction) > 0.0f) {
+        normal = -normal;
+    }
 
-    // Simple directional light
-    glm::vec3 lightDir = glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f));
-    float diffuseIntensity = glm::max(glm::dot(normal, -lightDir), 0.0f);
-
-    // Get material color
-    glm::vec3 baseColor = getMaterialAlbedo(rayhit.hit.geomID);
-    return baseColor * diffuseIntensity;
+    // Get material properties
+    glm::vec3 albedo = getMaterialAlbedo(rayhit.hit.geomID);
+    
+    // Calculate hit point
+    glm::vec3 hit_point = origin + rayhit.ray.tfar * direction;
+    
+    // Use the new lighting system for direct lighting
+    glm::vec3 view_dir = -direction; // Direction towards camera
+    glm::vec3 direct_lighting = m_light_manager.calculateDirectLighting(
+        hit_point, normal, view_dir, albedo, scene);
+    
+    return direct_lighting;
 }
 
 glm::vec3 PathTracer::traceRay(RTCScene scene, const glm::vec3& origin, 
