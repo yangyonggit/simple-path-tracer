@@ -8,6 +8,9 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+
 // Image dimensions
 const int IMAGE_WIDTH = 800;
 const int IMAGE_HEIGHT = 600;
@@ -68,6 +71,78 @@ glm::vec3 traceRayWithShading(RTCScene scene, const glm::vec3& origin, const glm
     return baseColor * diffuseIntensity;
 }
 
+// Function to initialize OpenGL and create a window
+GLFWwindow* initializeOpenGL(int width, int height) {
+    if (!glfwInit()) {
+        std::cerr << "Failed to initialize GLFW!\n";
+        return nullptr;
+    }
+
+    // Request an older compatibility profile so we can use immediate-mode
+    // and fixed-function pipeline (glBegin/glEnd, glEnable(GL_TEXTURE_2D)).
+    // Modern core profiles remove these functions which can cause nothing
+    // to be rendered when using the simple immediate-mode code below.
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 1);
+    // Do NOT request CORE profile so compatibility/fixed pipeline is available.
+
+    GLFWwindow* window = glfwCreateWindow(width, height, "Path Tracer Output", nullptr, nullptr);
+    if (!window) {
+        std::cerr << "Failed to create GLFW window!\n";
+        glfwTerminate();
+        return nullptr;
+    }
+
+    glfwMakeContextCurrent(window);
+
+    if (glewInit() != GLEW_OK) {
+        std::cerr << "Failed to initialize GLEW!\n";
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return nullptr;
+    }
+
+    glViewport(0, 0, width, height);
+    return window;
+}
+
+// Function to render the image using OpenGL
+void renderImageWithOpenGL(GLFWwindow* window, const std::vector<unsigned char>& image, int width, int height) {
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    // Ensure correct row alignment for 3-byte RGB data
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    while (!glfwWindowShouldClose(window)) {
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, texture);
+
+    glBegin(GL_QUADS);
+    // Flip top/bottom vertex positions as requested (invert Y for each vertex)
+    // Texture coordinates remain the same; only vertex positions swap vertically.
+    glTexCoord2f(0.0f, 0.0f); glVertex2f(-1.0f, 1.0f);
+    glTexCoord2f(1.0f, 0.0f); glVertex2f(1.0f, 1.0f);
+    glTexCoord2f(1.0f, 1.0f); glVertex2f(1.0f, -1.0f);
+    glTexCoord2f(0.0f, 1.0f); glVertex2f(-1.0f, -1.0f);
+    glEnd();
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+
+    glDeleteTextures(1, &texture);
+    glfwDestroyWindow(window);
+    glfwTerminate();
+}
+
 int main() {
     std::cout << "Starting path tracer with Embree4...\n";
 
@@ -94,6 +169,7 @@ int main() {
         for (int x = 0; x < IMAGE_WIDTH; ++x) {
             // Calculate normalized pixel coordinates
             float u = float(x) / float(IMAGE_WIDTH);
+            // Use straightforward v (0..1) across image rows
             float v = float(y) / float(IMAGE_HEIGHT);
             
             // Get ray direction from camera
@@ -115,14 +191,35 @@ int main() {
         }
     }
 
-    std::cout << "Raytracing complete. Saving image...\n";
+    std::cout << "Raytracing complete. Rendering image in OpenGL window...\n";
+    // Create a flipped copy (rows reversed) for PNG and OpenGL upload so
+    // the on-disk PNG and the GL texture both display upright.
+    std::vector<unsigned char> flipped(image.size());
+    const int rowBytes = IMAGE_WIDTH * 3;
+    for (int yy = 0; yy < IMAGE_HEIGHT; ++yy) {
+        const unsigned char* srcRow = image.data() + (IMAGE_HEIGHT - 1 - yy) * rowBytes;
+        unsigned char* dstRow = flipped.data() + yy * rowBytes;
+        memcpy(dstRow, srcRow, rowBytes);
+    }
 
-    // Save image as PNG
-    if (stbi_write_png("output.png", IMAGE_WIDTH, IMAGE_HEIGHT, 3, image.data(), IMAGE_WIDTH * 3)) {
+    // Saving to PNG temporarily disabled while debugging display
+    /*
+    std::cout << "Saving image to 'output.png'...\n";
+    if (stbi_write_png("output.png", IMAGE_WIDTH, IMAGE_HEIGHT, 3, flipped.data(), IMAGE_WIDTH * 3)) {
         std::cout << "Image saved successfully as 'output.png'\n";
     } else {
-        std::cerr << "Failed to save image!\n";
+        std::cerr << "Failed to save image to 'output.png'\n";
     }
+    */
+
+    // Initialize OpenGL and create a window
+    GLFWwindow* window = initializeOpenGL(IMAGE_WIDTH, IMAGE_HEIGHT);
+    if (!window) {
+        return -1;
+    }
+
+    // Render the image using OpenGL
+    renderImageWithOpenGL(window, image, IMAGE_WIDTH, IMAGE_HEIGHT);
 
     std::cout << "Path tracer completed successfully!\n";
     return 0;
