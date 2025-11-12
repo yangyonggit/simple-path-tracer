@@ -16,6 +16,7 @@ find_package(glm CONFIG REQUIRED)
 find_package(Stb REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(GLEW REQUIRED)
+find_package(TBB CONFIG REQUIRED)
 
 # Create executable
 add_executable(${PROJECT_NAME} 
@@ -32,7 +33,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 # Link libraries
-target_link_libraries(${PROJECT_NAME} embree glm::glm-header-only glfw opengl32 GLEW::GLEW)
+target_link_libraries(${PROJECT_NAME} embree glm::glm-header-only glfw opengl32 GLEW::GLEW TBB::tbb)
 
 
 # Set output directory
