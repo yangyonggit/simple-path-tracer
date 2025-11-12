@@ -12,8 +12,19 @@
 const int IMAGE_WIDTH = 800;
 const int IMAGE_HEIGHT = 600;
 
-// Function to trace a ray and return geometry ID (or -1 if no hit)
-int traceRay(RTCScene scene, const glm::vec3& origin, const glm::vec3& direction) {
+// Function to get color based on geometry ID
+glm::vec3 getColorFromGeometryID(int geomID) {
+    switch(geomID) {
+        case 0: return glm::vec3(0.8f, 0.8f, 0.8f); // Ground plane - Light gray
+        case 1: return glm::vec3(1.0f, 0.2f, 0.2f); // Test box - Red
+        case 2: return glm::vec3(0.2f, 1.0f, 0.2f); // Cube - Green
+        case 3: return glm::vec3(0.2f, 0.2f, 1.0f); // Sphere - Blue
+        default: return glm::vec3(0.0f, 0.0f, 0.0f); // Background - Black
+    }
+}
+
+// Function to trace a ray and return shaded color with Lambertian shading
+glm::vec3 traceRayWithShading(RTCScene scene, const glm::vec3& origin, const glm::vec3& direction) {
     RTCRayHit rayhit;
     
     // Set ray origin and direction
@@ -34,19 +45,27 @@ int traceRay(RTCScene scene, const glm::vec3& origin, const glm::vec3& direction
     // Perform ray intersection
     rtcIntersect1(scene, &rayhit);
 
-    // Return geometry ID if hit, -1 if miss
-    return (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) ? rayhit.hit.geomID : -1;
-}
-
-// Function to get color based on geometry ID
-glm::vec3 getColorFromGeometryID(int geomID) {
-    switch(geomID) {
-        case 0: return glm::vec3(0.8f, 0.8f, 0.8f); // Ground plane - Light gray
-        case 1: return glm::vec3(1.0f, 0.2f, 0.2f); // Test box - Red
-        case 2: return glm::vec3(0.2f, 1.0f, 0.2f); // Cube - Green
-        case 3: return glm::vec3(0.2f, 0.2f, 1.0f); // Sphere - Blue
-        default: return glm::vec3(0.0f, 0.0f, 0.0f); // Background - Black
+    // If no hit, return background color
+    if (rayhit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
+        return glm::vec3(0.0f, 0.0f, 0.0f); // Black background
     }
+
+    // Get hit normal from Embree (geometric normal)
+    glm::vec3 normal(rayhit.hit.Ng_x, rayhit.hit.Ng_y, rayhit.hit.Ng_z);
+    normal = glm::normalize(normal);
+
+    // Define directional light direction (light comes FROM this direction)
+    glm::vec3 lightDir = glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f));
+
+    // Compute Lambertian diffuse intensity: max(dot(normal, -lightDir), 0)
+    // We use -lightDir because we want the direction TO the light source
+    float diffuseIntensity = glm::max(glm::dot(normal, -lightDir), 0.0f);
+
+    // Get base color from geometry ID
+    glm::vec3 baseColor = getColorFromGeometryID(rayhit.hit.geomID);
+
+    // Apply shading: multiply base color by diffuse intensity (white light)
+    return baseColor * diffuseIntensity;
 }
 
 int main() {
@@ -80,11 +99,8 @@ int main() {
             // Get ray direction from camera
             glm::vec3 ray_dir = camera.getRayDirection(u, v);
             
-            // Trace ray and get geometry ID
-            int geomID = traceRay(embree_scene.getScene(), camera.getPosition(), ray_dir);
-            
-            // Get color based on geometry ID
-            glm::vec3 color = getColorFromGeometryID(geomID);
+            // Trace ray and get shaded color with Lambertian shading
+            glm::vec3 color = traceRayWithShading(embree_scene.getScene(), camera.getPosition(), ray_dir);
             
             // Convert to 8-bit color and store in image
             int pixel_index = (y * IMAGE_WIDTH + x) * 3;
