@@ -80,20 +80,32 @@ glm::vec3 PathTracer::cosineHemisphereSample(const glm::vec3& normal) {
 
 glm::vec3 PathTracer::getColorFromGeometryID(int geomID) {
     switch(geomID) {
-        case 0: return glm::vec3(0.8f, 0.8f, 0.8f); // Ground plane - Light gray
-        case 1: return glm::vec3(1.0f, 0.2f, 0.2f); // Test box - Red
-        case 2: return glm::vec3(0.2f, 1.0f, 0.2f); // Cube - Green
-        case 3: return glm::vec3(0.2f, 0.2f, 1.0f); // Sphere - Blue
+        case 0: return glm::vec3(1.0f, 0.71f, 0.29f); // Gold sphere
+        case 1: return glm::vec3(0.95f, 0.93f, 0.88f); // Silver sphere  
+        case 2: return glm::vec3(0.95f, 0.64f, 0.54f); // Copper sphere
+        case 3: return glm::vec3(0.56f, 0.57f, 0.58f); // Iron sphere
+        case 4: return glm::vec3(0.8f, 0.2f, 0.2f); // Plastic sphere
+        case 5: return glm::vec3(0.3f, 0.3f, 0.3f); // Rubber sphere
+        case 6: return glm::vec3(1.0f, 1.0f, 1.0f); // Glass sphere
+        case 7: return glm::vec3(0.4f, 0.25f, 0.1f); // Wood sphere
+        case 8: return glm::vec3(0.6f, 0.6f, 0.6f); // Concrete sphere
+        case 9: return glm::vec3(0.8f, 0.8f, 0.8f); // Ground plane - Light gray
         default: return glm::vec3(0.0f, 0.0f, 0.0f); // Background - Black
     }
 }
 
 glm::vec3 PathTracer::getMaterialAlbedo(int geomID) {
     switch(geomID) {
-        case 0: return glm::vec3(0.7f, 0.7f, 0.7f); // Ground plane - Light gray diffuse
-        case 1: return glm::vec3(0.8f, 0.3f, 0.3f); // Test box - Red diffuse
-        case 2: return glm::vec3(0.3f, 0.8f, 0.3f); // Cube - Green diffuse
-        case 3: return glm::vec3(0.3f, 0.3f, 0.8f); // Sphere - Blue diffuse
+        case 0: return glm::vec3(1.0f, 0.71f, 0.29f); // Gold sphere
+        case 1: return glm::vec3(0.95f, 0.93f, 0.88f); // Silver sphere
+        case 2: return glm::vec3(0.95f, 0.64f, 0.54f); // Copper sphere
+        case 3: return glm::vec3(0.56f, 0.57f, 0.58f); // Iron sphere
+        case 4: return glm::vec3(0.8f, 0.2f, 0.2f); // Plastic sphere
+        case 5: return glm::vec3(0.3f, 0.3f, 0.3f); // Rubber sphere
+        case 6: return glm::vec3(1.0f, 1.0f, 1.0f); // Glass sphere
+        case 7: return glm::vec3(0.4f, 0.25f, 0.1f); // Wood sphere
+        case 8: return glm::vec3(0.6f, 0.6f, 0.6f); // Concrete sphere
+        case 9: return glm::vec3(0.7f, 0.7f, 0.7f); // Ground plane - Light gray diffuse
         default: return glm::vec3(0.0f, 0.0f, 0.0f); // Background - Black
     }
 }
@@ -101,17 +113,35 @@ glm::vec3 PathTracer::getMaterialAlbedo(int geomID) {
 void PathTracer::setupDefaultMaterials() {
     m_materials.clear();
     
-    // Material 0: Ground plane - Concrete
-    m_materials.push_back(Materials::Concrete());
+    // Material 0: Gold sphere
+    m_materials.push_back(Materials::Gold());
     
-    // Material 1: Test box - Red plastic  
-    m_materials.push_back(Material(glm::vec3(0.8f, 0.2f, 0.2f), 0.0f, 0.4f));
+    // Material 1: Silver sphere
+    m_materials.push_back(Materials::Silver());
     
-    // Material 2: Cube - Copper metal
+    // Material 2: Copper sphere
     m_materials.push_back(Materials::Copper());
     
-    // Material 3: Sphere - Gold metal
-    m_materials.push_back(Materials::Gold());
+    // Material 3: Iron sphere
+    m_materials.push_back(Materials::Iron());
+    
+    // Material 4: Plastic sphere
+    m_materials.push_back(Materials::Plastic());
+    
+    // Material 5: Rubber sphere
+    m_materials.push_back(Materials::Rubber());
+    
+    // Material 6: Glass sphere
+    m_materials.push_back(Materials::Glass());
+    
+    // Material 7: Wood sphere
+    m_materials.push_back(Materials::Wood());
+    
+    // Material 8: Concrete sphere
+    m_materials.push_back(Materials::Concrete());
+    
+    // Material 9: Ground plane - Concrete
+    m_materials.push_back(Materials::Concrete());
 }
 
 void PathTracer::setMaterial(int index, const Material& material) {
@@ -130,7 +160,19 @@ const Material& PathTracer::getMaterial(int index) const {
 }
 
 const Material& PathTracer::getMaterialByID(int geomID) const {
-    return getMaterial(geomID);
+    // Map Embree geometry ID to material index
+    // Spheres are added first (geomID 0-8), then ground plane (geomID 9)
+    if (geomID >= 0 && geomID <= 8) {
+        // Sphere materials: 0=Gold, 1=Silver, 2=Copper, 3=Iron, 4=Plastic, 5=Rubber, 6=Glass, 7=Wood, 8=Concrete
+        return getMaterial(geomID);
+    } else if (geomID == 9) {
+        // Ground plane uses Concrete material (index 9)
+        return getMaterial(9);
+    }
+    
+    // Return default material if index is out of bounds
+    static Material defaultMaterial;
+    return defaultMaterial;
 }
 
 glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origin, 
@@ -379,7 +421,7 @@ void PathTracer::renderImage(std::vector<unsigned char>& pixels, int width, int 
                             const Camera& camera, RTCScene scene,
                             std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples,
                             bool camera_moved, std::atomic<int>& tiles_completed) const {
-    const int TILE_SIZE = 64;  // Match the tile size from main.cpp
+    const int TILE_SIZE = 32;  // Match the tile size from main.cpp
     
     // Calculate tile dimensions
     int numTilesX = (width + TILE_SIZE - 1) / TILE_SIZE;
@@ -406,7 +448,7 @@ void PathTracer::renderTileTask(int tileIndex, int threadIndex, std::vector<unsi
                                const PathTracer& pathTracer, int numTilesX, int numTilesY,
                                std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples,
                                bool camera_moved, std::atomic<int>& tiles_completed) {
-    const int TILE_SIZE = 64;  // Match the tile size from main.cpp
+    const int TILE_SIZE = 32;  // Match the tile size from main.cpp
     
     // Calculate tile coordinates
     int tileX = tileIndex % numTilesX;
@@ -432,25 +474,30 @@ void PathTracer::renderTileTask(int tileIndex, int threadIndex, std::vector<unsi
             
             int pixel_index = y * width + x;
             
-            if (camera_moved) {
-                // Camera moved - start new accumulation
-                accumulation_buffer[pixel_index] = color;
-            } else {
-                // Camera stationary - accumulate samples
-                accumulation_buffer[pixel_index] += color;
+            // Add bounds checking for safety
+            if (pixel_index >= 0 && pixel_index < accumulation_buffer.size()) {
+                if (camera_moved) {
+                    // Camera moved - start new accumulation
+                    accumulation_buffer[pixel_index] = color;
+                } else {
+                    // Camera stationary - accumulate samples
+                    accumulation_buffer[pixel_index] += color;
+                }
+                
+                // Get averaged color for display
+                glm::vec3 averaged_color = accumulation_buffer[pixel_index] / float(accumulated_samples);
+                
+                // Clamp color to valid range
+                averaged_color = glm::clamp(averaged_color, 0.0f, 1.0f);
+                
+                // Convert to 8-bit color and store in image
+                int rgb_index = pixel_index * 3;
+                if (rgb_index >= 0 && rgb_index + 2 < pixels.size()) {
+                    pixels[rgb_index + 0] = static_cast<unsigned char>(averaged_color.r * 255); // R
+                    pixels[rgb_index + 1] = static_cast<unsigned char>(averaged_color.g * 255); // G
+                    pixels[rgb_index + 2] = static_cast<unsigned char>(averaged_color.b * 255); // B
+                }
             }
-            
-            // Get averaged color for display
-            glm::vec3 averaged_color = accumulation_buffer[pixel_index] / float(accumulated_samples);
-            
-            // Clamp color to valid range
-            averaged_color = glm::clamp(averaged_color, 0.0f, 1.0f);
-            
-            // Convert to 8-bit color and store in image
-            int rgb_index = pixel_index * 3;
-            pixels[rgb_index + 0] = static_cast<unsigned char>(averaged_color.r * 255); // R
-            pixels[rgb_index + 1] = static_cast<unsigned char>(averaged_color.g * 255); // G
-            pixels[rgb_index + 2] = static_cast<unsigned char>(averaged_color.b * 255); // B
         }
     }
     

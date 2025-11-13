@@ -35,16 +35,27 @@ void EmbreeScene::initialize() {
         return;
     }
     
-    // Add geometries to scene
+    // Reserve space for all spheres to ensure no reallocation
+    m_spheres.reserve(9);
+    
+    // Add only spheres with different materials
+    addSphereWithMaterial(0, glm::vec3(-3.0f, 1.0f, 0.0f), 1.0f);  // Gold
+    addSphereWithMaterial(1, glm::vec3(-1.0f, 1.0f, 0.0f), 1.0f);  // Silver  
+    addSphereWithMaterial(2, glm::vec3(1.0f, 1.0f, 0.0f), 1.0f);   // Copper
+    addSphereWithMaterial(3, glm::vec3(3.0f, 1.0f, 0.0f), 1.0f);   // Iron
+    addSphereWithMaterial(4, glm::vec3(-2.0f, 1.0f, 2.0f), 1.0f);  // Plastic
+    addSphereWithMaterial(5, glm::vec3(0.0f, 1.0f, 2.0f), 1.0f);   // Rubber
+    addSphereWithMaterial(6, glm::vec3(2.0f, 1.0f, 2.0f), 1.0f);   // Glass
+    addSphereWithMaterial(7, glm::vec3(-1.0f, 1.0f, -2.0f), 1.0f); // Wood
+    addSphereWithMaterial(8, glm::vec3(1.0f, 1.0f, -2.0f), 1.0f);  // Concrete
+    
+    // Add a ground plane for reference
     addGroundPlane();
-    addTestBox();
-    addCube();
-    addSphere();
     
     // Commit scene for ray tracing
     rtcCommitScene(m_scene);
     
-    std::cout << "EmbreeScene initialized successfully with ground plane, box, cube, and sphere.\n";
+    std::cout << "EmbreeScene initialized successfully with 9 material spheres and ground plane.\n";
 }
 
 void EmbreeScene::addGroundPlane() {
@@ -141,17 +152,27 @@ void EmbreeScene::createCube(float pos_x, float pos_y, float pos_z, float size_x
 }
 
 void EmbreeScene::addSphere() {
+    // Legacy function - use addSphereWithMaterial instead
+    addSphereWithMaterial(0, glm::vec3(0.0f, 1.0f, 0.0f), 0.5f);
+}
+
+void EmbreeScene::addSphereWithMaterial(unsigned int materialID, const glm::vec3& position, float radius) {
     // Create a user-defined geometry for analytical sphere
     RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_USER);
     
-    // Set sphere parameters - position it between the box and cube for better visibility
-    m_sphere_data.center_x = 0.0f; // Center position
-    m_sphere_data.center_y = -1.0f + 0.3f + 0.1f; // Lifted 0.1 units above previous position
-    m_sphere_data.center_z = 0.5f; // Move closer to camera for better visibility
-    m_sphere_data.radius = 0.3f;
+    // Create sphere data directly
+    SphereData sphere;
+    sphere.center_x = position.x;
+    sphere.center_y = position.y;
+    sphere.center_z = position.z;
+    sphere.radius = radius;
+    sphere.materialID = materialID;
     
-    // Set user data
-    rtcSetGeometryUserData(geometry, &m_sphere_data);
+    // Store sphere in vector for bookkeeping
+    m_spheres.push_back(sphere);
+    
+    // Use pointer to element in vector (safe since we know we won't resize)
+    rtcSetGeometryUserData(geometry, &m_spheres.back());
     
     // Set callback functions
     rtcSetGeometryUserPrimitiveCount(geometry, 1);
@@ -160,11 +181,21 @@ void EmbreeScene::addSphere() {
     rtcSetGeometryBoundsFunction(geometry, sphereBoundsFunc, nullptr);
     
     rtcCommitGeometry(geometry);
-    rtcAttachGeometry(m_scene, geometry);
+    
+    // Attach geometry with specific material ID
+    unsigned int geomID = rtcAttachGeometry(m_scene, geometry);
     rtcReleaseGeometry(geometry);
+    
+    std::cout << "Added sphere at (" << position.x << ", " << position.y << ", " << position.z 
+              << ") with radius " << radius << " and material ID " << materialID 
+              << " (Embree geomID: " << geomID << ")" << std::endl;
 }
 
 void EmbreeScene::cleanup() {
+    // Clear our bookkeeping vector
+    m_spheres.clear();
+    
+    // Embree will clean up geometry user data when scene is released
     if (m_scene) {
         rtcReleaseScene(m_scene);
         m_scene = nullptr;
@@ -183,9 +214,12 @@ void EmbreeScene::sphereIntersectFunc(const RTCIntersectFunctionNArguments* args
     unsigned int primID = args->primID;
     
     assert(args->N == 1);
-    const SphereData* sphere = (const SphereData*)ptr;
     
-    if (!valid[0]) return;
+    // Add safety checks for Release mode
+    if (!valid || !valid[0] || !ptr || !rayhit) return;
+    
+    // Get sphere data by value (direct access)
+    const SphereData* sphere = (const SphereData*)ptr;
     
     // Ray-sphere intersection using quadratic formula
     // Ray: P = O + t*D
@@ -256,9 +290,11 @@ void EmbreeScene::sphereOccludedFunc(const RTCOccludedFunctionNArguments* args) 
     unsigned int primID = args->primID;
     
     assert(args->N == 1);
-    const SphereData* sphere = (const SphereData*)ptr;
     
-    if (!valid[0]) return;
+    // Add safety checks for Release mode
+    if (!valid || !valid[0] || !ptr || !ray) return;
+    
+    const SphereData* sphere = (const SphereData*)ptr;
     
     // Ray-sphere intersection logic for occlusion test
     float oc_x = ray->org_x - sphere->center_x;
@@ -292,6 +328,9 @@ void EmbreeScene::sphereOccludedFunc(const RTCOccludedFunctionNArguments* args) 
 }
 
 void EmbreeScene::sphereBoundsFunc(const RTCBoundsFunctionArguments* args) {
+    // Add safety checks for Release mode
+    if (!args || !args->geometryUserPtr || !args->bounds_o) return;
+    
     const SphereData* sphere = (const SphereData*)args->geometryUserPtr;
     RTCBounds* bounds_o = args->bounds_o;
     

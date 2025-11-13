@@ -3,8 +3,10 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <thread>
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
+#include <tbb/global_control.h>
 #include "Camera.h"
 #include "EmbreeScene.h"
 #include "PathTracer.h"
@@ -19,8 +21,8 @@
 const int IMAGE_WIDTH = 800;
 const int IMAGE_HEIGHT = 600;
 
-// Tile rendering parameters
-const int TILE_SIZE = 64;
+// Tile rendering parameters (smaller tiles for better responsiveness)
+const int TILE_SIZE = 32;
 
 // Progress tracking
 std::atomic<int> g_tiles_completed{0};
@@ -188,17 +190,7 @@ GLFWwindow* initializeOpenGL(int width, int height) {
 }
 
 // Function to render the image using OpenGL with real-time camera control
-void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
-    // Create PathTracer with default settings
-    PathTracer::Settings settings;
-    settings.samples_per_pixel = 16;
-    settings.max_depth = 8;
-    settings.enable_path_tracing = true;
-    PathTracer path_tracer(settings);
-    
-    // Setup lights
-    setupPathTracerWithLights(path_tracer);
-
+void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera, PathTracer& path_tracer) {
     // Initialize OpenGL texture
     GLuint texture = initializeGLTexture();
 
@@ -256,6 +248,16 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera) {
 int main() {
     std::cout << "Starting path tracer with Embree4...\n";
 
+    // Limit TBB threads to leave one core free for system (unless only 1 core available)
+    unsigned int total_cores = std::thread::hardware_concurrency();
+    unsigned int num_threads = (total_cores <= 1) ? 1 : total_cores - 1;
+    tbb::global_control global_limit(tbb::global_control::max_allowed_parallelism, num_threads);
+    std::cout << "TBB using " << num_threads << " of " << total_cores << " available threads";
+    if (total_cores > 1) {
+        std::cout << " (reserved 1 core for system)";
+    }
+    std::cout << "\n";
+
     // Create scene using helper class
     EmbreeScene embree_scene;
     if (!embree_scene.isValid()) {
@@ -271,24 +273,34 @@ int main() {
         return -1;
     }
 
-    // Create camera positioned to see ground plane, box, cube, and sphere
-    glm::vec3 camera_pos(2.0f, 1.0f, 2.5f);  // Position above and away from scene
-    glm::vec3 camera_target(0.0f, -0.3f, 0.0f);  // Look toward the scene center
+    // Create camera positioned to see all 9 spheres spread across the scene
+    // Spheres are at: front row (-3,-1,1,3), middle row (-2,0,2), back row (-1,1)
+    glm::vec3 camera_pos(0.0f, 3.0f, 8.0f);  // Higher and further back to see all spheres
+    glm::vec3 camera_target(0.0f, 1.0f, 0.0f);  // Look at sphere center height
     float aspect_ratio = float(IMAGE_WIDTH) / float(IMAGE_HEIGHT);
-    Camera camera(camera_pos, camera_target, glm::vec3(0.0f, 1.0f, 0.0f), 45.0f, aspect_ratio);
+    Camera camera(camera_pos, camera_target, glm::vec3(0.0f, 1.0f, 0.0f), 60.0f, aspect_ratio); // Wider FOV
     
     // Set global camera pointer for callbacks
     g_camera = &camera;
+    
+    // Create and setup PathTracer with lights (reduced settings for better performance)
+    PathTracer::Settings settings;
+    settings.samples_per_pixel = 4;  // Reduced from 16 for better performance
+    settings.max_depth = 6;          // Reduced from 8 for better performance
+    settings.enable_path_tracing = true;
+    
+    PathTracer path_tracer(settings);
+    setupPathTracerWithLights(path_tracer);  // Add this crucial line!
 
     std::cout << "OpenGL initialized. Starting real-time rendering with camera controls...\n";
     std::cout << "Rendering mode: Monte Carlo Path Tracing (TBB Parallel + Accumulation)\n";
-    std::cout << "Path tracing settings: 16 samples/pixel, max depth 8\n";
+    std::cout << "Path tracing settings: 4 samples/pixel, max depth 6 (optimized for performance)\n";
     std::cout << "Parallel processing: Intel TBB with " << TILE_SIZE << "x" << TILE_SIZE << " tiles\n";
     std::cout << "Accumulation: Progressive sampling when camera is stationary\n";
     std::cout << "Controls: WASD to move, mouse to look around, ESC to exit\n";
 
     // Render the scene with real-time camera control
-    renderImageWithOpenGL(window, embree_scene.getScene(), camera);
+    renderImageWithOpenGL(window, embree_scene.getScene(), camera, path_tracer);
 
     std::cout << "Path tracer completed successfully!\n";
     return 0;

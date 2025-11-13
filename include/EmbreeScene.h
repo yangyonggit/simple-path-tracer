@@ -1,6 +1,8 @@
 #pragma once
 
 #include <embree4/rtcore.h>
+#include <glm/glm.hpp>
+#include <vector>
 
 class EmbreeScene {
 private:
@@ -11,8 +13,9 @@ private:
     struct SphereData {
         float center_x, center_y, center_z;
         float radius;
+        unsigned int materialID;
     };
-    SphereData m_sphere_data;
+    std::vector<SphereData> m_spheres;
     
 public:
     EmbreeScene();
@@ -36,6 +39,7 @@ private:
     void addTestBox();
     void addCube();
     void addSphere();
+    void addSphereWithMaterial(unsigned int materialID, const glm::vec3& position, float radius);
     void cleanup();
     
     // Helper function to create a cube with specified parameters

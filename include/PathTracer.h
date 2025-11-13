@@ -16,8 +16,8 @@ class PathTracer {
 public:
     // Path tracing parameters
     struct Settings {
-        int samples_per_pixel = 16;
-        int max_depth = 8;
+        int samples_per_pixel = 1;
+        int max_depth = 1;
         float min_contribution = 0.001f;
         bool enable_path_tracing = true;
     };
