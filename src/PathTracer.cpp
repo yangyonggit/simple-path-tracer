@@ -151,7 +151,7 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
     rayhit.ray.dir_z = direction.z;
     
     // Set ray parameters
-    rayhit.ray.tnear = 0.001f; // Small offset to avoid self-intersection
+    rayhit.ray.tnear = 1e-4f; // Use robust tnear for secondary rays
     rayhit.ray.tfar = std::numeric_limits<float>::infinity();
     rayhit.ray.mask = 0xFFFFFFFF;
     rayhit.ray.flags = 0;
@@ -227,7 +227,10 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
             reflect_dir = glm::normalize(roughened_reflect);
         }
         
-        indirect_light = tracePathMonteCarlo(scene, hit_point, reflect_dir, depth - 1);
+        // Use robust epsilon for secondary ray origin offset
+        float eps = 1e-4f * glm::max(1.0f, glm::max(glm::max(abs(hit_point.x), abs(hit_point.y)), abs(hit_point.z)));
+        glm::vec3 offset_origin = hit_point + normal * eps;
+        indirect_light = tracePathMonteCarlo(scene, offset_origin, reflect_dir, depth - 1);
         
         // For metals, use simpler reflection model instead of full BRDF to avoid artifacts
         // Metals mainly reflect the environment directly

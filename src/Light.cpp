@@ -16,19 +16,19 @@ bool Light::isOccluded(const glm::vec3& hit_point, const glm::vec3& normal,
                       const glm::vec3& light_dir, float light_distance, RTCScene scene) const {
     RTCRay shadow_ray;
     
-    // Offset the ray origin along the surface normal to avoid self-intersection
-    const float epsilon = 0.001f;
-    glm::vec3 offset_origin = hit_point + normal * epsilon;
+    // Use robust epsilon calculation as suggested
+    float eps = 1e-4f * glm::max(1.0f, glm::max(glm::max(abs(hit_point.x), abs(hit_point.y)), abs(hit_point.z)));
+    glm::vec3 offset_origin = hit_point + normal * eps;
     
-    // Set up shadow ray
+    // Set up shadow ray with robust parameters
     shadow_ray.org_x = offset_origin.x;
     shadow_ray.org_y = offset_origin.y;
     shadow_ray.org_z = offset_origin.z;
     shadow_ray.dir_x = light_dir.x;
     shadow_ray.dir_y = light_dir.y;
     shadow_ray.dir_z = light_dir.z;
-    shadow_ray.tnear = 0.0f; // Start from offset origin
-    shadow_ray.tfar = light_distance - epsilon; // Stop just before light
+    shadow_ray.tnear = 1e-4f; // As suggested for shadow rays
+    shadow_ray.tfar = light_distance - 1e-4f; // Stop before light
     shadow_ray.mask = 0xFFFFFFFF;
     shadow_ray.flags = 0;
     

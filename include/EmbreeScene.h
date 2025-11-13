@@ -38,6 +38,9 @@ private:
     void addSphere();
     void cleanup();
     
+    // Helper function to create a cube with specified parameters
+    void createCube(float pos_x, float pos_y, float pos_z, float size_x, float size_y, float size_z);
+    
     // User-defined geometry callbacks
     static void sphereIntersectFunc(const RTCIntersectFunctionNArguments* args);
     static void sphereOccludedFunc(const RTCOccludedFunctionNArguments* args);

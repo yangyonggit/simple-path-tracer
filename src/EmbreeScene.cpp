@@ -77,28 +77,39 @@ void EmbreeScene::addGroundPlane() {
 }
 
 void EmbreeScene::addTestBox() {
-    // Create a simple box using 12 triangles (6 faces * 2 triangles each)
+    // Create a smaller box positioned to the left
+    createCube(-1.0f, -1.0f + 0.15f + 0.1f, 0.0f, 0.3f, 0.15f, 0.3f);
+}
+
+void EmbreeScene::addCube() {
+    // Create a larger cube positioned to the right
+    createCube(1.0f, -1.0f + 0.4f + 0.1f, 0.0f, 0.4f, 0.4f, 0.4f);
+}
+
+void EmbreeScene::createCube(float pos_x, float pos_y, float pos_z, float size_x, float size_y, float size_z) {
+    // Create a cube using 12 triangles (6 faces * 2 triangles each)
     RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_TRIANGLE);
     
-    // Define box vertices (8 vertices for a cube)
+    // Define cube vertices (8 vertices for a cube)
     float* vertices = (float*)rtcSetNewGeometryBuffer(geometry, 
         RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3, 3 * sizeof(float), 8);
     
-    float box_size = 0.3f;
-    float box_height = 0.15f;
-    float pos_x = -1.0f; // Position to the left
+    // Calculate half sizes for easier vertex positioning
+    float half_x = size_x;
+    float half_y = size_y;
+    float half_z = size_z;
     
     // Bottom face vertices
-    vertices[0] = pos_x - box_size; vertices[1] = -1.0f + box_height; vertices[2] = -box_size;  // 0
-    vertices[3] = pos_x + box_size; vertices[4] = -1.0f + box_height; vertices[5] = -box_size;  // 1
-    vertices[6] = pos_x + box_size; vertices[7] = -1.0f + box_height; vertices[8] = box_size;   // 2
-    vertices[9] = pos_x - box_size; vertices[10] = -1.0f + box_height; vertices[11] = box_size; // 3
+    vertices[0] = pos_x - half_x; vertices[1] = pos_y; vertices[2] = pos_z - half_z;  // 0
+    vertices[3] = pos_x + half_x; vertices[4] = pos_y; vertices[5] = pos_z - half_z;  // 1
+    vertices[6] = pos_x + half_x; vertices[7] = pos_y; vertices[8] = pos_z + half_z;   // 2
+    vertices[9] = pos_x - half_x; vertices[10] = pos_y; vertices[11] = pos_z + half_z; // 3
     
     // Top face vertices
-    vertices[12] = pos_x - box_size; vertices[13] = -1.0f + box_height * 2; vertices[14] = -box_size; // 4
-    vertices[15] = pos_x + box_size; vertices[16] = -1.0f + box_height * 2; vertices[17] = -box_size; // 5
-    vertices[18] = pos_x + box_size; vertices[19] = -1.0f + box_height * 2; vertices[20] = box_size;  // 6
-    vertices[21] = pos_x - box_size; vertices[22] = -1.0f + box_height * 2; vertices[23] = box_size;  // 7
+    vertices[12] = pos_x - half_x; vertices[13] = pos_y + half_y * 2; vertices[14] = pos_z - half_z; // 4
+    vertices[15] = pos_x + half_x; vertices[16] = pos_y + half_y * 2; vertices[17] = pos_z - half_z; // 5
+    vertices[18] = pos_x + half_x; vertices[19] = pos_y + half_y * 2; vertices[20] = pos_z + half_z;  // 6
+    vertices[21] = pos_x - half_x; vertices[22] = pos_y + half_y * 2; vertices[23] = pos_z + half_z;  // 7
 
     // Define triangle indices (12 triangles for 6 faces)
     unsigned* indices = (unsigned*)rtcSetNewGeometryBuffer(geometry,
@@ -129,66 +140,14 @@ void EmbreeScene::addTestBox() {
     rtcReleaseGeometry(geometry);
 }
 
-void EmbreeScene::addCube() {
-    // Create a larger cube positioned differently
-    RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_TRIANGLE);
-    
-    float* vertices = (float*)rtcSetNewGeometryBuffer(geometry, 
-        RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3, 3 * sizeof(float), 8);
-    
-    float cube_size = 0.4f;
-    float cube_height = 0.8f;
-    float pos_x = 1.0f; // Position to the right
-    float pos_z = 0.0f; // Center Z position
-    
-    // Bottom face vertices  
-    vertices[0] = pos_x - cube_size; vertices[1] = -1.0f; vertices[2] = pos_z - cube_size;  // 0
-    vertices[3] = pos_x + cube_size; vertices[4] = -1.0f; vertices[5] = pos_z - cube_size;  // 1
-    vertices[6] = pos_x + cube_size; vertices[7] = -1.0f; vertices[8] = pos_z + cube_size;   // 2
-    vertices[9] = pos_x - cube_size; vertices[10] = -1.0f; vertices[11] = pos_z + cube_size; // 3
-    
-    // Top face vertices
-    vertices[12] = pos_x - cube_size; vertices[13] = -1.0f + cube_height; vertices[14] = pos_z - cube_size; // 4
-    vertices[15] = pos_x + cube_size; vertices[16] = -1.0f + cube_height; vertices[17] = pos_z - cube_size; // 5
-    vertices[18] = pos_x + cube_size; vertices[19] = -1.0f + cube_height; vertices[20] = pos_z + cube_size;  // 6
-    vertices[21] = pos_x - cube_size; vertices[22] = -1.0f + cube_height; vertices[23] = pos_z + cube_size;  // 7
-
-    unsigned* indices = (unsigned*)rtcSetNewGeometryBuffer(geometry,
-        RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, 3 * sizeof(unsigned), 12);
-    
-    int idx = 0;
-    // Bottom face
-    indices[idx++] = 0; indices[idx++] = 2; indices[idx++] = 1;
-    indices[idx++] = 0; indices[idx++] = 3; indices[idx++] = 2;
-    // Top face  
-    indices[idx++] = 4; indices[idx++] = 5; indices[idx++] = 6;
-    indices[idx++] = 4; indices[idx++] = 6; indices[idx++] = 7;
-    // Front face
-    indices[idx++] = 0; indices[idx++] = 1; indices[idx++] = 5;
-    indices[idx++] = 0; indices[idx++] = 5; indices[idx++] = 4;
-    // Back face
-    indices[idx++] = 2; indices[idx++] = 3; indices[idx++] = 7;
-    indices[idx++] = 2; indices[idx++] = 7; indices[idx++] = 6;
-    // Left face
-    indices[idx++] = 3; indices[idx++] = 0; indices[idx++] = 4;
-    indices[idx++] = 3; indices[idx++] = 4; indices[idx++] = 7;
-    // Right face
-    indices[idx++] = 1; indices[idx++] = 2; indices[idx++] = 6;
-    indices[idx++] = 1; indices[idx++] = 6; indices[idx++] = 5;
-
-    rtcCommitGeometry(geometry);
-    rtcAttachGeometry(m_scene, geometry);
-    rtcReleaseGeometry(geometry);
-}
-
 void EmbreeScene::addSphere() {
     // Create a user-defined geometry for analytical sphere
     RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_USER);
     
-    // Set sphere parameters - align with cube on X axis
-    m_sphere_data.center_x = -0.0f;
-    m_sphere_data.center_y = -1.0f + 0.3f; // Sitting on ground with radius 0.3f
-    m_sphere_data.center_z = -1.5f;
+    // Set sphere parameters - position it between the box and cube for better visibility
+    m_sphere_data.center_x = 0.0f; // Center position
+    m_sphere_data.center_y = -1.0f + 0.3f + 0.1f; // Lifted 0.1 units above previous position
+    m_sphere_data.center_z = 0.5f; // Move closer to camera for better visibility
     m_sphere_data.radius = 0.3f;
     
     // Set user data
