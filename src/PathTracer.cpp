@@ -23,7 +23,7 @@ PathTracer::PathTracer(const Settings& settings) : m_settings(settings) {
     setupDefaultMaterials();
     
     // Try to load cubemap (should auto-detect cross layout)
-    if (!loadCubemap("assets/Cubemap/derelict_airfield_02_4k.hdr")) {
+    if (!loadCubemap("assets/Cubemap/brown_photostudio_02_4k.hdr")) {
         std::cout << "Failed to load cubemap, using procedural sky" << std::endl;
     }
 }
@@ -254,7 +254,7 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
                 if (material.metallic > 0.5f) {
                     brdf *= 1.2f; // Enhance metallic reflection visibility
                 } else if (material.isTransparent()) {
-                    brdf *= 0.3f; // Reduce direct lighting for transparent materials to enhance transparency
+                    brdf *= 0.1f; // Greatly reduce direct lighting for transparent materials
                 }
                 
                 direct_lighting += brdf * light_radiance;
@@ -361,7 +361,7 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
             }
             
             indirect_light = total_indirect / float(indirect_samples);
-            indirect_contribution = material.getDiffuseColor() * indirect_light * 0.3f;
+            indirect_contribution = material.getDiffuseColor() * indirect_light * 0.6f; // Increased for stronger global illumination
         }
     }
     
@@ -626,8 +626,8 @@ glm::vec3 PathTracer::getCubemapColor(const glm::vec3& direction) const {
         // First clamp extreme values only
         color = glm::min(color, glm::vec3(5.0f)); // More reasonable clamp
         
-        // Light exposure adjustment - keep most of original brightness
-        color *= 0.4f; // Further reduced to make view-dependent effects more visible
+        // Light exposure adjustment - increase for stronger global lighting
+        color *= 0.8f; // Increased from 0.4f to boost environment lighting
         
         // Optional light Reinhard if still too bright
         // color = color / (color + glm::vec3(1.0f));

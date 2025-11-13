@@ -89,11 +89,11 @@ namespace Materials {
     
     // Dielectrics
     inline Material Plastic() {
-        return Material(glm::vec3(0.8f, 0.2f, 0.2f), 0.0f, 0.4f);
+        return Material(glm::vec3(0.8f, 0.2f, 0.2f), 0.0f, 0.4f, glm::vec3(0.0f), 1.2f); // Lower IOR
     }
     
     inline Material Rubber() {
-        return Material(glm::vec3(0.3f, 0.3f, 0.3f), 0.0f, 0.8f);
+        return Material(glm::vec3(0.3f, 0.3f, 0.3f), 0.0f, 0.8f, glm::vec3(0.0f), 1.1f); // Lower IOR
     }
     
     inline Material Glass() {
@@ -107,11 +107,11 @@ namespace Materials {
     
     // Mixed materials
     inline Material Wood() {
-        return Material(glm::vec3(0.4f, 0.25f, 0.1f), 0.0f, 0.7f);
+        return Material(glm::vec3(0.4f, 0.25f, 0.1f), 0.0f, 0.7f, glm::vec3(0.0f), 1.0f); // No refraction
     }
     
     inline Material Concrete() {
-        return Material(glm::vec3(0.6f, 0.6f, 0.6f), 0.0f, 0.9f);
+        return Material(glm::vec3(0.6f, 0.6f, 0.6f), 0.0f, 0.9f, glm::vec3(0.0f), 1.0f); // No refraction
     }
     
     // Emissive material
