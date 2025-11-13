@@ -229,11 +229,11 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera, P
                                g_camera_moved, g_tiles_completed);
         
         // Show accumulation progress
-        if (g_accumulated_samples == 1) {
-            std::cout << "\nFrame " << g_accumulated_samples << " completed (new view)                    \n" << std::flush;
-        } else {
-            std::cout << "\nFrame " << g_accumulated_samples << " completed (accumulating)                    \n" << std::flush;
-        }
+        // if (g_accumulated_samples == 1) {
+        //     std::cout << "\nFrame " << g_accumulated_samples << " completed (new view)                    \n" << std::flush;
+        // } else {
+        //     std::cout << "\nFrame " << g_accumulated_samples << " completed (accumulating)                    \n" << std::flush;
+        // }
 
         // Render to OpenGL
         renderGLFrame(texture, image);

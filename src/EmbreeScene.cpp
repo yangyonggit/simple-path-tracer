@@ -1,7 +1,10 @@
 #include "EmbreeScene.h"
+#include "GLTFLoader.h"
+#include "MeshIntegrator.h"
 #include <iostream>
 #include <cmath>
 #include <cassert>
+#include <glm/gtc/matrix_transform.hpp>
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -35,6 +38,11 @@ void EmbreeScene::initialize() {
         return;
     }
     
+    // Initialize GLTF components after device and scene are created
+    m_gltfLoader = std::make_unique<GLTFLoader>();
+    m_meshIntegrator = std::make_unique<MeshIntegrator>(m_device, m_scene);
+    std::cout << "GLTF components initialized successfully.\n";
+    
     // Reserve space for all geometry to ensure no reallocation
     m_spheres.reserve(8);  // 8 spheres + 1 cube
     
@@ -55,10 +63,25 @@ void EmbreeScene::initialize() {
     addSphereWithMaterial(7, glm::vec3(2.0f, 1.0f, -2.0f), 1.0f);  // Wood
     addSphereWithMaterial(8, glm::vec3(0.0f, 1.0f, -4.0f), 1.0f);  // Concrete
     
-    // Commit scene for ray tracing (no ground plane)
+    // Commit scene after basic geometry to update BVH first
     rtcCommitScene(m_scene);
     
     std::cout << "EmbreeScene initialized successfully with 8 spheres and 1 glass cube (no ground plane).\n";
+    
+    // Add GLTF model after all basic geometry is created and committed
+    if (m_gltfLoader && m_meshIntegrator) {
+        // Create a transform matrix to position the GLTF model
+        glm::mat4 gltfTransform = glm::mat4(1.0f);
+        gltfTransform = glm::translate(gltfTransform, glm::vec3(5.0f, 0.5f, 0.0f)); // Lower position
+        gltfTransform = glm::scale(gltfTransform, glm::vec3(5.0f)); // Scale to 5x size
+        
+        // Load GLTF file with real parsing, use copper material (material ID 2) - very visible metal
+        if (loadGLTFWithTransform("assets/models/rattan_dining_chair/scene.gltf", gltfTransform, 2)) { // Use copper material (material ID 2)
+            std::cout << "Added GLTF model at position (5, 0.5, 0) with copper material and 5x scale.\n";
+        } else {
+            std::cout << "Note: GLTF model loading failed.\n";
+        }
+    }
 }
 
 void EmbreeScene::addGroundPlane() {
@@ -174,7 +197,7 @@ void EmbreeScene::addSphereWithMaterial(unsigned int materialID, const glm::vec3
     // Store sphere in vector for bookkeeping
     m_spheres.push_back(sphere);
     
-    // Use pointer to element in vector (safe since we know we won't resize)
+    // Use pointer to element in vector (safe since we reserve space and don't resize)
     rtcSetGeometryUserData(geometry, &m_spheres.back());
     
     // Set callback functions
@@ -221,7 +244,7 @@ void EmbreeScene::sphereIntersectFunc(const RTCIntersectFunctionNArguments* args
     // Add safety checks for Release mode
     if (!valid || !valid[0] || !ptr || !rayhit) return;
     
-    // Get sphere data by value (direct access)
+    // Get sphere data by pointer
     const SphereData* sphere = (const SphereData*)ptr;
     
     // Ray-sphere intersection using quadratic formula
@@ -399,4 +422,53 @@ void EmbreeScene::addCubeWithMaterial(unsigned int materialID, const glm::vec3& 
     rtcCommitGeometry(geometry);
     rtcAttachGeometry(m_scene, geometry);
     rtcReleaseGeometry(geometry);
+}
+
+bool EmbreeScene::loadGLTF(const std::string& filepath, unsigned int materialID) {
+    return loadGLTFWithTransform(filepath, glm::mat4(1.0f), materialID);
+}
+
+bool EmbreeScene::loadGLTFWithTransform(const std::string& filepath, const glm::mat4& transform, unsigned int materialID) {
+    if (!m_gltfLoader || !m_meshIntegrator) {
+        std::cerr << "GLTF components not initialized" << std::endl;
+        return false;
+    }
+    
+    // Load GLTF file
+    if (!m_gltfLoader->loadGLTF(filepath)) {
+        std::cerr << "Failed to load GLTF file: " << filepath << std::endl;
+        return false;
+    }
+    
+    // Apply transform and material
+    m_gltfLoader->transformMeshes(transform);
+    m_gltfLoader->assignMaterial(materialID);
+    
+    // Add meshes to scene
+    if (!m_meshIntegrator->addAllMeshes(*m_gltfLoader)) {
+        std::cerr << "Failed to add GLTF meshes to scene" << std::endl;
+        return false;
+    }
+    
+    // Commit scene to update BVH
+    rtcCommitScene(m_scene);
+    
+    std::cout << "Successfully loaded GLTF file: " << filepath 
+              << " with material ID: " << materialID << std::endl;
+    
+    return true;
+}
+
+unsigned int EmbreeScene::getGeometryMaterialID(unsigned int geomID) const {
+    // For spheres, the geometry ID directly maps to material ID (first N geometries)
+    if (geomID < m_spheres.size()) {
+        return m_spheres[geomID].materialID;
+    }
+    
+    // For meshes, use the mesh integrator mapping
+    if (m_meshIntegrator) {
+        return m_meshIntegrator->getMaterialID(geomID);
+    }
+    
+    return 0; // Default material
 }

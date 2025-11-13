@@ -3,19 +3,27 @@
 #include <embree4/rtcore.h>
 #include <glm/glm.hpp>
 #include <vector>
+#include <memory>
+#include "GLTFLoader.h"
+#include "MeshIntegrator.h"
 
 class EmbreeScene {
-private:
-    RTCDevice m_device;
-    RTCScene m_scene;
-    
-    // Sphere parameters for user-defined geometry
+public:
+    // Sphere parameters for user-defined geometry (public for PathTracer access)
     struct SphereData {
         float center_x, center_y, center_z;
         float radius;
         unsigned int materialID;
     };
+
+private:
+    RTCDevice m_device;
+    RTCScene m_scene;
     std::vector<SphereData> m_spheres;
+    
+    // GLTF mesh integration
+    std::unique_ptr<MeshIntegrator> m_meshIntegrator;
+    std::unique_ptr<GLTFLoader> m_gltfLoader;
     
 public:
     EmbreeScene();
@@ -42,6 +50,13 @@ private:
     void addSphereWithMaterial(unsigned int materialID, const glm::vec3& position, float radius);
     void addCubeWithMaterial(unsigned int materialID, const glm::vec3& position, float size);
     void cleanup();
+    
+    // GLTF mesh loading
+    bool loadGLTF(const std::string& filepath, unsigned int materialID = 0);
+    bool loadGLTFWithTransform(const std::string& filepath, const glm::mat4& transform, unsigned int materialID = 0);
+    
+    // Get material ID for geometry (includes both spheres and meshes)
+    unsigned int getGeometryMaterialID(unsigned int geomID) const;
     
     // Helper function to create a cube with specified parameters
     void createCube(float pos_x, float pos_y, float pos_z, float size_x, float size_y, float size_z);

@@ -1,0 +1,11 @@
+Model Information:
+* title:	Rattan Dining Chair
+* source:	https://sketchfab.com/3d-models/rattan-dining-chair-1f028b3d5f8b497d8c7e20149e6ef209
+* author:	Taufiq K (https://sketchfab.com/fqrhmn)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Rattan Dining Chair" (https://sketchfab.com/3d-models/rattan-dining-chair-1f028b3d5f8b497d8c7e20149e6ef209) by Taufiq K (https://sketchfab.com/fqrhmn) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

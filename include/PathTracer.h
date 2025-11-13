@@ -45,6 +45,7 @@ private:
     
     // Material management (private helper)
     const Material& getMaterialByID(int geomID) const;
+    const Material& getMaterialFromHit(RTCScene scene, const RTCRayHit& rayhit) const;
     void setupDefaultMaterials();
     
     // Environment/Sky functions

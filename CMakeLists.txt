@@ -17,6 +17,7 @@ find_package(Stb REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(TBB CONFIG REQUIRED)
+find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
 
 # Create executable
 add_executable(${PROJECT_NAME} 
@@ -27,12 +28,15 @@ add_executable(${PROJECT_NAME}
     src/Light.cpp
     src/Material.cpp
     src/Cubemap.cpp
+    src/GLTFLoader.cpp
+    src/MeshIntegrator.cpp
 )
 
 # Add include directories
 target_include_directories(${PROJECT_NAME} PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${Stb_INCLUDE_DIR}
+    ${TINYGLTF_INCLUDE_DIRS}
 )
 
 # Link libraries

@@ -2,6 +2,7 @@
 #include "Camera.h"
 #include "Light.h"
 #include "Material.h"
+#include "EmbreeScene.h"
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -172,7 +173,45 @@ const Material& PathTracer::getMaterialByID(int geomID) const {
         return getMaterial(geomID);
     }
     
+    // For any other geometry (like GLTF meshes), we should get material ID from Embree user data
+    // This requires access to the RTCScene and hit information, which we don't have here
+    // This is a limitation of the current design - material ID should be passed from the ray tracing function
+    
     // Return default material if index is out of bounds
+    static Material defaultMaterial;
+    return defaultMaterial;
+}
+
+const Material& PathTracer::getMaterialFromHit(RTCScene scene, const RTCRayHit& rayhit) const {
+    unsigned int geomID = rayhit.hit.geomID;
+    
+    // Get geometry and user data
+    RTCGeometry geometry = rtcGetGeometry(scene, geomID);
+    if (geometry) {
+        void* userData = rtcGetGeometryUserData(geometry);
+        if (userData) {
+            // Try to interpret as material ID first (for meshes)
+            // Material IDs are typically small positive integers (< 1000)
+            uintptr_t value = (uintptr_t)userData;
+            
+            if (value < 1000) {
+                // Likely a direct material ID (for triangle meshes)
+                unsigned int materialID = (unsigned int)value;
+                return getMaterial(materialID);
+            } else {
+                // Likely a pointer to SphereData (for user-defined spheres)
+                const EmbreeScene::SphereData* sphere = (const EmbreeScene::SphereData*)userData;
+                return getMaterial(sphere->materialID);
+            }
+        }
+    }
+    
+    // Fallback: if no user data, use geomID as material ID (for compatibility)
+    if (geomID < m_materials.size()) {
+        return getMaterial(geomID);
+    }
+    
+    // Return default material if we can't get the material ID
     static Material defaultMaterial;
     return defaultMaterial;
 }
@@ -222,7 +261,7 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
     }
 
     // Get material properties
-    const Material& material = getMaterialByID(rayhit.hit.geomID);
+    const Material& material = getMaterialFromHit(scene, rayhit);
     
     // Add emission if material is emissive
     glm::vec3 emission = material.emission;
@@ -406,7 +445,7 @@ glm::vec3 PathTracer::traceRaySimple(RTCScene scene, const glm::vec3& origin,
     }
 
     // Get material properties
-    const Material& material = getMaterialByID(rayhit.hit.geomID);
+    const Material& material = getMaterialFromHit(scene, rayhit);
     
     // Calculate hit point
     glm::vec3 hit_point = origin + rayhit.ray.tfar * direction;
@@ -554,8 +593,8 @@ void PathTracer::renderTileTask(int tileIndex, int threadIndex, std::vector<unsi
     int completed = ++tiles_completed;
     if (completed % 8 == 0) { // Show progress every 8 tiles
         int total = numTilesX * numTilesY;
-        std::cout << "Rendered " << completed << "/" << total << " tiles (" 
-                 << int(100.0f * completed / total) << "%)\r" << std::flush;
+        // std::cout << "Rendered " << completed << "/" << total << " tiles (" 
+                //  << int(100.0f * completed / total) << "%)\r" << std::flush;
     }
 }
 
