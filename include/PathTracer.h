@@ -51,6 +51,9 @@ private:
     static glm::vec3 getSkyColor(const glm::vec3& direction);
     glm::vec3 getCubemapColor(const glm::vec3& direction) const;
     
+    // Advanced tone mapping
+    static glm::vec3 acesToneMapping(const glm::vec3& color);
+    
     // Cubemap management
     bool loadCubemap(const std::string& filename);
     

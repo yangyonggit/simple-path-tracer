@@ -47,6 +47,7 @@ struct Material {
     static float geometrySchlickGGX(float NdotV, float roughness);
     static float geometrySmith(const glm::vec3& N, const glm::vec3& V, const glm::vec3& L, float roughness);
     static glm::vec3 fresnelSchlick(float cosTheta, const glm::vec3& F0);
+    static glm::vec3 fresnelSchlickRoughness(float cosTheta, const glm::vec3& F0, float roughness);
     
     // Main BRDF evaluation function
     glm::vec3 evaluateBRDF(const glm::vec3& N, const glm::vec3& V, const glm::vec3& L) const;

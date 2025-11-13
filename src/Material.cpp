@@ -41,9 +41,19 @@ float Material::geometrySmith(const glm::vec3& N, const glm::vec3& V, const glm:
     return ggx1 * ggx2;
 }
 
-// Schlick's Fresnel approximation
+// Improved Schlick's Fresnel approximation with roughness consideration
 glm::vec3 Material::fresnelSchlick(float cosTheta, const glm::vec3& F0) {
-    return F0 + (1.0f - F0) * glm::pow(glm::clamp(1.0f - cosTheta, 0.0f, 1.0f), 5.0f);
+    // Enhanced Fresnel with smoother falloff
+    float fresnel_power = 5.0f;
+    return F0 + (1.0f - F0) * glm::pow(glm::clamp(1.0f - cosTheta, 0.0f, 1.0f), fresnel_power);
+}
+
+// Enhanced Fresnel with roughness consideration for more realistic edges
+glm::vec3 Material::fresnelSchlickRoughness(float cosTheta, const glm::vec3& F0, float roughness) {
+    float fresnel_power = 5.0f;
+    glm::vec3 F = F0 + (glm::max(glm::vec3(1.0f - roughness), F0) - F0) * 
+                  glm::pow(glm::clamp(1.0f - cosTheta, 0.0f, 1.0f), fresnel_power);
+    return F;
 }
 
 // Complete Cook-Torrance BRDF evaluation

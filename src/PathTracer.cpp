@@ -244,11 +244,33 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
         indirect_contribution = F * indirect_light * 0.8f; // Increased from 0.4f to make reflections clearer
         
     } else {
-        // Dielectrics: Use standard diffuse sampling 
-        glm::vec3 scatter_direction = cosineHemisphereSample(normal);
-        indirect_light = tracePathMonteCarlo(scene, hit_point, scatter_direction, depth - 1);
+        // Dielectrics: Use importance sampling for global illumination
+        // Sample multiple directions for better color bleeding
+        glm::vec3 total_indirect(0.0f);
         
-        float indirect_strength = 3.14159f * 0.12f; // Slightly increased to balance with brighter metals
+        // Exponential sampling reduction: use more samples at shallow depths for better quality
+        // while maintaining performance by reducing samples at deeper levels
+        // Formula: samples = max(1, initial_samples >> (depth_threshold_passed))
+        const int max_samples = 2;
+        const int depth_threshold = m_settings.max_depth / 2; // Use half of max_depth as threshold
+        int depth_exceeded = std::max(0, depth - depth_threshold);
+        int indirect_samples = std::max(1, max_samples >> depth_exceeded); // Bit shift for power-of-2 reduction
+        
+        for (int i = 0; i < indirect_samples; i++) {
+            glm::vec3 scatter_direction = cosineHemisphereSample(normal);
+            
+            // Use robust epsilon for secondary ray origin offset
+            float eps = 1e-4f * glm::max(1.0f, glm::max(glm::max(abs(hit_point.x), abs(hit_point.y)), abs(hit_point.z)));
+            glm::vec3 offset_origin = hit_point + normal * eps;
+            
+            glm::vec3 sample_light = tracePathMonteCarlo(scene, offset_origin, scatter_direction, depth - 1);
+            total_indirect += sample_light;
+        }
+        
+        indirect_light = total_indirect / float(indirect_samples);
+        
+        // Enhanced global illumination strength for realistic color bleeding
+        float indirect_strength = 0.3f; // Increased for more visible global illumination
         indirect_contribution = material.getDiffuseColor() * indirect_light * indirect_strength;
     }
     
@@ -344,8 +366,11 @@ glm::vec3 PathTracer::traceRay(RTCScene scene, const glm::vec3& origin,
     // Average the samples
     color /= float(m_settings.samples_per_pixel);
     
-    // Simple tone mapping (gamma correction)
-    color = glm::sqrt(color);
+    // ACES Filmic tone mapping for natural exposure
+    color = acesToneMapping(color);
+    
+    // Gamma correction
+    color = glm::pow(color, glm::vec3(1.0f / 2.2f));
     
     return color;
 }
@@ -516,4 +541,23 @@ glm::vec3 PathTracer::getCubemapColor(const glm::vec3& direction) const {
         // Fallback to procedural sky
         return getSkyColor(direction);
     }
+}
+
+// ACES Filmic tone mapping implementation
+glm::vec3 PathTracer::acesToneMapping(const glm::vec3& color) {
+    // ACES constants
+    const float a = 2.51f;
+    const float b = 0.03f;
+    const float c = 2.43f;
+    const float d = 0.59f;
+    const float e = 0.14f;
+    
+    // Apply ACES formula: (color * (a * color + b)) / (color * (c * color + d) + e)
+    glm::vec3 numerator = color * (a * color + glm::vec3(b));
+    glm::vec3 denominator = color * (c * color + glm::vec3(d)) + glm::vec3(e);
+    
+    // Avoid division by zero
+    denominator = glm::max(denominator, glm::vec3(0.0001f));
+    
+    return glm::clamp(numerator / denominator, glm::vec3(0.0f), glm::vec3(1.0f));
 }
