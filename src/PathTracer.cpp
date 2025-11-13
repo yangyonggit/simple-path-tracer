@@ -113,6 +113,7 @@ glm::vec3 PathTracer::getMaterialAlbedo(int geomID) {
 void PathTracer::setupDefaultMaterials() {
     m_materials.clear();
     
+    // Metal materials first (0-3)
     // Material 0: Gold sphere
     m_materials.push_back(Materials::Gold());
     
@@ -125,23 +126,25 @@ void PathTracer::setupDefaultMaterials() {
     // Material 3: Iron sphere
     m_materials.push_back(Materials::Iron());
     
-    // Material 4: Plastic sphere
-    m_materials.push_back(Materials::Plastic());
-    
-    // Material 5: Rubber sphere
-    m_materials.push_back(Materials::Rubber());
-    
-    // Material 6: Glass sphere
+    // Glass material (4)
+    // Material 4: Glass cube
     m_materials.push_back(Materials::Glass());
     
+    // Dielectric materials (5-6)
+    // Material 5: Plastic sphere
+    m_materials.push_back(Materials::Plastic());
+    
+    // Material 6: Rubber sphere
+    m_materials.push_back(Materials::Rubber());
+    
+    // Mixed materials (7-8)
     // Material 7: Wood sphere
     m_materials.push_back(Materials::Wood());
     
     // Material 8: Concrete sphere
     m_materials.push_back(Materials::Concrete());
     
-    // Material 9: Ground plane - Concrete
-    m_materials.push_back(Materials::Concrete());
+    // No ground plane - removed
 }
 
 void PathTracer::setMaterial(int index, const Material& material) {
@@ -161,13 +164,12 @@ const Material& PathTracer::getMaterial(int index) const {
 
 const Material& PathTracer::getMaterialByID(int geomID) const {
     // Map Embree geometry ID to material index
-    // Spheres are added first (geomID 0-8), then ground plane (geomID 9)
+    // Spheres: 0-3 (metals), 5-8 (others), Cube: 4 (glass)
     if (geomID >= 0 && geomID <= 8) {
-        // Sphere materials: 0=Gold, 1=Silver, 2=Copper, 3=Iron, 4=Plastic, 5=Rubber, 6=Glass, 7=Wood, 8=Concrete
+        // For the cube (triangle geometry), the material ID is stored in user data
+        // For spheres (user geometry), the geometry ID directly maps to material ID
+        // Since we're creating them in order, the mapping is direct
         return getMaterial(geomID);
-    } else if (geomID == 9) {
-        // Ground plane uses Concrete material (index 9)
-        return getMaterial(9);
     }
     
     // Return default material if index is out of bounds
@@ -245,8 +247,16 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
             // Check for shadows
             bool occluded = light->isOccluded(hit_point, normal, light_direction, light_distance, scene);
             if (!occluded) {
-                // Use Cook-Torrance BRDF for realistic shading
+                // Use Cook-Torrance BRDF for realistic shading with enhanced view dependency
                 glm::vec3 brdf = material.evaluateBRDF(normal, view_dir, light_direction);
+                
+                // Boost specular reflection for view-dependent effects
+                if (material.metallic > 0.5f) {
+                    brdf *= 1.2f; // Enhance metallic reflection visibility
+                } else if (material.isTransparent()) {
+                    brdf *= 0.3f; // Reduce direct lighting for transparent materials to enhance transparency
+                }
+                
                 direct_lighting += brdf * light_radiance;
             }
         }
@@ -261,7 +271,7 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
     
     if (material.metallic > 0.5f) {
         // Metals: Sample environment using reflection direction for better specular highlights
-        glm::vec3 reflect_dir = glm::reflect(-view_dir, normal);
+        glm::vec3 reflect_dir = glm::reflect(direction, normal);
         
         // Add some roughness-based perturbation for realistic metal reflection
         if (material.roughness > 0.01f) {
@@ -279,41 +289,80 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
         glm::vec3 fresnel = material.getF0(); // Use material's F0 value
         float ndotv = glm::max(glm::dot(normal, view_dir), 0.0f);
         
-        // Simple fresnel approximation
-        glm::vec3 F = fresnel + (glm::vec3(1.0f) - fresnel) * pow(1.0f - ndotv, 5.0f);
+        // Simple fresnel approximation with stronger view dependency
+        glm::vec3 F = fresnel + (glm::vec3(1.0f) - fresnel) * pow(1.0f - ndotv, 3.0f); // Changed from 5.0f to 3.0f for more visible effect
         
-        // Metal contribution - increase to make reflections more visible
-        indirect_contribution = F * indirect_light * 0.8f; // Increased from 0.4f to make reflections clearer
+        // Metal contribution - stronger fresnel influence
+        indirect_contribution = F * indirect_light * 0.9f; // Increased reflection strength
         
     } else {
-        // Dielectrics: Use importance sampling for global illumination
-        // Sample multiple directions for better color bleeding
-        glm::vec3 total_indirect(0.0f);
-        
-        // Exponential sampling reduction: use more samples at shallow depths for better quality
-        // while maintaining performance by reducing samples at deeper levels
-        // Formula: samples = max(1, initial_samples >> (depth_threshold_passed))
-        const int max_samples = 2;
-        const int depth_threshold = m_settings.max_depth / 2; // Use half of max_depth as threshold
-        int depth_exceeded = std::max(0, depth - depth_threshold);
-        int indirect_samples = std::max(1, max_samples >> depth_exceeded); // Bit shift for power-of-2 reduction
-        
-        for (int i = 0; i < indirect_samples; i++) {
-            glm::vec3 scatter_direction = cosineHemisphereSample(normal);
+        // Dielectrics: Handle both reflection and transmission for transparent materials
+        if (material.isTransparent()) {
+            // Glass/transparent material - handle refraction with proper Fresnel
+            bool entering = glm::dot(direction, normal) < 0.0f;
+            glm::vec3 outward_normal = entering ? normal : -normal;
+            float eta = entering ? (1.0f / material.ior) : material.ior;
             
-            // Use robust epsilon for secondary ray origin offset
-            float eps = 1e-4f * glm::max(1.0f, glm::max(glm::max(abs(hit_point.x), abs(hit_point.y)), abs(hit_point.z)));
-            glm::vec3 offset_origin = hit_point + normal * eps;
+            // Calculate proper viewing angle for Fresnel (angle between surface normal and view direction)
+            float cos_theta = glm::max(glm::dot(normal, view_dir), 0.0f);
             
-            glm::vec3 sample_light = tracePathMonteCarlo(scene, offset_origin, scatter_direction, depth - 1);
-            total_indirect += sample_light;
+            // Try refraction first
+            glm::vec3 refracted = refract(direction, outward_normal, eta);
+            bool can_refract = glm::length(refracted) > 0.0f;
+            
+            if (can_refract) {
+                // Calculate Fresnel coefficient with proper incident angle
+                float fresnel = schlickFresnel(cos_theta, material.ior);
+                
+                // Blend transmission and reflection based on Fresnel coefficient
+                // This avoids random decisions and black lines
+                
+                // Calculate transmission component
+                float eps = 1e-4f * glm::max(1.0f, glm::max(glm::max(abs(hit_point.x), abs(hit_point.y)), abs(hit_point.z)));
+                glm::vec3 refract_origin = hit_point - outward_normal * eps;
+                glm::vec3 transmission_light = tracePathMonteCarlo(scene, refract_origin, refracted, depth - 1);
+                
+                // Calculate reflection component
+                glm::vec3 reflect_dir = glm::reflect(direction, normal);
+                glm::vec3 reflect_origin = hit_point + normal * eps;
+                glm::vec3 reflection_light = tracePathMonteCarlo(scene, reflect_origin, reflect_dir, depth - 1);
+                
+                // Blend based on Fresnel coefficient
+                float transmission_weight = 1.0f - fresnel;
+                float reflection_weight = fresnel;
+                
+                indirect_contribution = transmission_light * transmission_weight + reflection_light * reflection_weight;
+            } else {
+                // Total internal reflection
+                glm::vec3 reflect_dir = glm::reflect(direction, normal);
+                float eps = 1e-4f * glm::max(1.0f, glm::max(glm::max(abs(hit_point.x), abs(hit_point.y)), abs(hit_point.z)));
+                glm::vec3 offset_origin = hit_point + normal * eps;
+                
+                indirect_light = tracePathMonteCarlo(scene, offset_origin, reflect_dir, depth - 1);
+                indirect_contribution = indirect_light; // Full reflection
+            }
+        } else {
+            // Regular dielectrics: Use importance sampling for global illumination
+            glm::vec3 total_indirect(0.0f);
+            
+            const int max_samples = 2;
+            const int depth_threshold = m_settings.max_depth / 2;
+            int depth_exceeded = std::max(0, depth - depth_threshold);
+            int indirect_samples = std::max(1, max_samples >> depth_exceeded);
+            
+            for (int i = 0; i < indirect_samples; i++) {
+                glm::vec3 scatter_direction = cosineHemisphereSample(normal);
+                
+                float eps = 1e-4f * glm::max(1.0f, glm::max(glm::max(abs(hit_point.x), abs(hit_point.y)), abs(hit_point.z)));
+                glm::vec3 offset_origin = hit_point + normal * eps;
+                
+                glm::vec3 sample_light = tracePathMonteCarlo(scene, offset_origin, scatter_direction, depth - 1);
+                total_indirect += sample_light;
+            }
+            
+            indirect_light = total_indirect / float(indirect_samples);
+            indirect_contribution = material.getDiffuseColor() * indirect_light * 0.3f;
         }
-        
-        indirect_light = total_indirect / float(indirect_samples);
-        
-        // Enhanced global illumination strength for realistic color bleeding
-        float indirect_strength = 0.3f; // Increased for more visible global illumination
-        indirect_contribution = material.getDiffuseColor() * indirect_light * indirect_strength;
     }
     
     // Combine emission, direct lighting, and indirect lighting
@@ -578,7 +627,7 @@ glm::vec3 PathTracer::getCubemapColor(const glm::vec3& direction) const {
         color = glm::min(color, glm::vec3(5.0f)); // More reasonable clamp
         
         // Light exposure adjustment - keep most of original brightness
-        color *= 0.7f; // Mild reduction instead of 0.15
+        color *= 0.4f; // Further reduced to make view-dependent effects more visible
         
         // Optional light Reinhard if still too bright
         // color = color / (color + glm::vec3(1.0f));
@@ -607,4 +656,33 @@ glm::vec3 PathTracer::acesToneMapping(const glm::vec3& color) {
     denominator = glm::max(denominator, glm::vec3(0.0001f));
     
     return glm::clamp(numerator / denominator, glm::vec3(0.0f), glm::vec3(1.0f));
+}
+
+// Helper functions for transparency and refraction
+float PathTracer::schlickFresnel(float cosine, float ior) const {
+    float r0 = (1.0f - ior) / (1.0f + ior);
+    r0 = r0 * r0;
+    return r0 + (1.0f - r0) * pow((1.0f - cosine), 5.0f);
+}
+
+glm::vec3 PathTracer::refract(const glm::vec3& incident, const glm::vec3& normal, float eta) const {
+    float cos_i = -glm::dot(normal, incident);
+    float sin_t2 = eta * eta * (1.0f - cos_i * cos_i);
+    
+    if (sin_t2 >= 1.0f) {
+        // Total internal reflection
+        return glm::vec3(0.0f);
+    }
+    
+    float cos_t = sqrt(1.0f - sin_t2);
+    return eta * incident + (eta * cos_i - cos_t) * normal;
+}
+
+bool PathTracer::shouldTransmit(const Material& material, float cosine) const {
+    float fresnel = schlickFresnel(cosine, material.ior);
+    float random_val = randomFloat();
+    float transparency = material.getTransparency();
+    
+    // Higher transparency = more likely to transmit
+    return random_val > (fresnel * (1.0f - transparency * 0.7f));
 }

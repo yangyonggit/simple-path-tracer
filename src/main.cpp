@@ -211,8 +211,8 @@ void renderImageWithOpenGL(GLFWwindow* window, RTCScene scene, Camera& camera, P
         glfwPollEvents();
         processInput();
 
-        // Check if camera has moved using Camera class method
-        g_camera_moved = camera.hasMovedSinceLastCheck();
+        // Check if camera has moved using Camera class method with enhanced sensitivity for glass effects
+        g_camera_moved = camera.hasMovedSinceLastCheck(0.0005f, 0.1f);
         
         if (g_camera_moved) {
             // Reset accumulation when camera moves

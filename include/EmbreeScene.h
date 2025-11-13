@@ -40,6 +40,7 @@ private:
     void addCube();
     void addSphere();
     void addSphereWithMaterial(unsigned int materialID, const glm::vec3& position, float radius);
+    void addCubeWithMaterial(unsigned int materialID, const glm::vec3& position, float size);
     void cleanup();
     
     // Helper function to create a cube with specified parameters

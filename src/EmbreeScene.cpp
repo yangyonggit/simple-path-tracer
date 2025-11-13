@@ -35,27 +35,30 @@ void EmbreeScene::initialize() {
         return;
     }
     
-    // Reserve space for all spheres to ensure no reallocation
-    m_spheres.reserve(9);
+    // Reserve space for all geometry to ensure no reallocation
+    m_spheres.reserve(8);  // 8 spheres + 1 cube
     
-    // Add only spheres with different materials
+    // Metal spheres - front row
     addSphereWithMaterial(0, glm::vec3(-3.0f, 1.0f, 0.0f), 1.0f);  // Gold
     addSphereWithMaterial(1, glm::vec3(-1.0f, 1.0f, 0.0f), 1.0f);  // Silver  
     addSphereWithMaterial(2, glm::vec3(1.0f, 1.0f, 0.0f), 1.0f);   // Copper
     addSphereWithMaterial(3, glm::vec3(3.0f, 1.0f, 0.0f), 1.0f);   // Iron
-    addSphereWithMaterial(4, glm::vec3(-2.0f, 1.0f, 2.0f), 1.0f);  // Plastic
-    addSphereWithMaterial(5, glm::vec3(0.0f, 1.0f, 2.0f), 1.0f);   // Rubber
-    addSphereWithMaterial(6, glm::vec3(2.0f, 1.0f, 2.0f), 1.0f);   // Glass
-    addSphereWithMaterial(7, glm::vec3(-1.0f, 1.0f, -2.0f), 1.0f); // Wood
-    addSphereWithMaterial(8, glm::vec3(1.0f, 1.0f, -2.0f), 1.0f);  // Concrete
     
-    // Add a ground plane for reference
-    addGroundPlane();
+    // Glass cube - middle position
+    addCubeWithMaterial(4, glm::vec3(0.0f, 1.0f, 2.0f), 1.5f);    // Glass Cube
     
-    // Commit scene for ray tracing
+    // Dielectric spheres - back row
+    addSphereWithMaterial(5, glm::vec3(-2.0f, 1.0f, -2.0f), 1.0f); // Plastic
+    addSphereWithMaterial(6, glm::vec3(0.0f, 1.0f, -2.0f), 1.0f);  // Rubber
+    
+    // Mixed material spheres - back row right
+    addSphereWithMaterial(7, glm::vec3(2.0f, 1.0f, -2.0f), 1.0f);  // Wood
+    addSphereWithMaterial(8, glm::vec3(0.0f, 1.0f, -4.0f), 1.0f);  // Concrete
+    
+    // Commit scene for ray tracing (no ground plane)
     rtcCommitScene(m_scene);
     
-    std::cout << "EmbreeScene initialized successfully with 9 material spheres and ground plane.\n";
+    std::cout << "EmbreeScene initialized successfully with 8 spheres and 1 glass cube (no ground plane).\n";
 }
 
 void EmbreeScene::addGroundPlane() {
@@ -341,4 +344,59 @@ void EmbreeScene::sphereBoundsFunc(const RTCBoundsFunctionArguments* args) {
     bounds_o->upper_x = sphere->center_x + sphere->radius;
     bounds_o->upper_y = sphere->center_y + sphere->radius;
     bounds_o->upper_z = sphere->center_z + sphere->radius;
+}
+
+void EmbreeScene::addCubeWithMaterial(unsigned int materialID, const glm::vec3& position, float size) {
+    // Create a cube using 12 triangles (6 faces * 2 triangles each)
+    RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_TRIANGLE);
+    
+    // Set the material ID for the geometry
+    rtcSetGeometryUserData(geometry, (void*)(uintptr_t)materialID);
+    
+    // Define cube vertices (8 vertices for a cube)
+    float* vertices = (float*)rtcSetNewGeometryBuffer(geometry, 
+        RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3, 3 * sizeof(float), 8);
+    
+    // Calculate half size for easier vertex positioning
+    float half = size * 0.5f;
+    
+    // Bottom face vertices (y = position.y - half)
+    vertices[0] = position.x - half; vertices[1] = position.y - half; vertices[2] = position.z - half;  // 0
+    vertices[3] = position.x + half; vertices[4] = position.y - half; vertices[5] = position.z - half;  // 1
+    vertices[6] = position.x + half; vertices[7] = position.y - half; vertices[8] = position.z + half;   // 2
+    vertices[9] = position.x - half; vertices[10] = position.y - half; vertices[11] = position.z + half; // 3
+    
+    // Top face vertices (y = position.y + half)
+    vertices[12] = position.x - half; vertices[13] = position.y + half; vertices[14] = position.z - half; // 4
+    vertices[15] = position.x + half; vertices[16] = position.y + half; vertices[17] = position.z - half; // 5
+    vertices[18] = position.x + half; vertices[19] = position.y + half; vertices[20] = position.z + half;  // 6
+    vertices[21] = position.x - half; vertices[22] = position.y + half; vertices[23] = position.z + half;  // 7
+
+    // Define triangle indices (12 triangles for 6 faces)
+    unsigned* indices = (unsigned*)rtcSetNewGeometryBuffer(geometry,
+        RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT3, 3 * sizeof(unsigned), 12);
+    
+    int idx = 0;
+    // Bottom face (y = position.y - half)
+    indices[idx++] = 0; indices[idx++] = 2; indices[idx++] = 1;
+    indices[idx++] = 0; indices[idx++] = 3; indices[idx++] = 2;
+    // Top face (y = position.y + half)
+    indices[idx++] = 4; indices[idx++] = 5; indices[idx++] = 6;
+    indices[idx++] = 4; indices[idx++] = 6; indices[idx++] = 7;
+    // Front face (z = position.z - half)
+    indices[idx++] = 0; indices[idx++] = 1; indices[idx++] = 5;
+    indices[idx++] = 0; indices[idx++] = 5; indices[idx++] = 4;
+    // Back face (z = position.z + half)
+    indices[idx++] = 2; indices[idx++] = 3; indices[idx++] = 7;
+    indices[idx++] = 2; indices[idx++] = 7; indices[idx++] = 6;
+    // Left face (x = position.x - half)
+    indices[idx++] = 3; indices[idx++] = 0; indices[idx++] = 4;
+    indices[idx++] = 3; indices[idx++] = 4; indices[idx++] = 7;
+    // Right face (x = position.x + half)
+    indices[idx++] = 1; indices[idx++] = 2; indices[idx++] = 6;
+    indices[idx++] = 1; indices[idx++] = 6; indices[idx++] = 5;
+
+    rtcCommitGeometry(geometry);
+    rtcAttachGeometry(m_scene, geometry);
+    rtcReleaseGeometry(geometry);
 }

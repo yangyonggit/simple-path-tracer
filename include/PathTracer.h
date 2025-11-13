@@ -16,8 +16,8 @@ class PathTracer {
 public:
     // Path tracing parameters
     struct Settings {
-        int samples_per_pixel = 1;
-        int max_depth = 1;
+        int samples_per_pixel = 4;
+        int max_depth = 4;
         float min_contribution = 0.001f;
         bool enable_path_tracing = true;
     };
@@ -92,6 +92,11 @@ public:
     
     // Utility functions
     static void initializeRandomSeed();
+    
+    // Helper functions for transparency and refraction
+    float schlickFresnel(float cosine, float ior) const;
+    glm::vec3 refract(const glm::vec3& incident, const glm::vec3& normal, float eta) const;
+    bool shouldTransmit(const Material& material, float cosine) const;
     
     // Tile rendering function
     static void renderTileTask(int tileIndex, int threadIndex, std::vector<unsigned char>& pixels,

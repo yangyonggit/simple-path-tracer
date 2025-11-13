@@ -42,6 +42,21 @@ struct Material {
         return glm::length(emission) > 0.0f;
     }
     
+    // Check if material is transparent (glass-like)
+    bool isTransparent() const {
+        // Material is transparent if it's not metallic and has high IOR
+        return metallic < 0.1f && ior > 1.3f;
+    }
+    
+    // Get transparency factor
+    float getTransparency() const {
+        if (isTransparent()) {
+            // Higher IOR = more transparent for glass-like materials
+            return glm::clamp((ior - 1.0f) / 0.7f, 0.0f, 0.95f);
+        }
+        return 0.0f;
+    }
+    
     // PBR Cook-Torrance BRDF calculations
     static float distributionGGX(const glm::vec3& N, const glm::vec3& H, float roughness);
     static float geometrySchlickGGX(float NdotV, float roughness);
@@ -83,6 +98,11 @@ namespace Materials {
     
     inline Material Glass() {
         return Material(glm::vec3(1.0f, 1.0f, 1.0f), 0.0f, 0.0f, glm::vec3(0.0f), 1.5f);
+    }
+    
+    // High-quality clear glass with slight blue tint
+    inline Material ClearGlass() {
+        return Material(glm::vec3(0.95f, 0.98f, 1.0f), 0.0f, 0.02f, glm::vec3(0.0f), 1.5f);
     }
     
     // Mixed materials
