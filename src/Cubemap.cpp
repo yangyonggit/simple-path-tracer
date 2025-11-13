@@ -4,6 +4,10 @@
 #include <iostream>
 #include <cmath>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 Cubemap::Cubemap() : m_size(0), m_loaded(false) {
 }
 
@@ -21,15 +25,22 @@ bool Cubemap::loadFromFile(const std::string& filename) {
         return false;
     }
     
-    std::cout << "Loaded cubemap: " << filename << " (" << width << "x" << height << ", " << channels << " channels)" << std::endl;
+    std::cout << "Loaded environment map: " << filename << " (" << width << "x" << height << ", " << channels << " channels)" << std::endl;
     
-    // Check if this looks like a cross layout (width:height should be 4:3)
+    // Auto-detect format based on aspect ratio and file extension
     float aspect = (float)width / (float)height;
-    if (abs(aspect - 4.0f/3.0f) < 0.1f) {
-        std::cout << "Detected cross layout cubemap" << std::endl;
+    std::string ext = filename.substr(filename.find_last_of('.'));
+    
+    // HDR files are typically equirectangular (2:1 ratio)
+    // Cross layout is typically 4:3 ratio and used for LDR cubemaps
+    if (ext == ".hdr" || ext == ".exr" || abs(aspect - 2.0f) < 0.1f) {
+        std::cout << "Detected HDR equirectangular environment map (aspect: " << aspect << ")" << std::endl;
+        return loadEquirectangular(data, width, height);
+    } else if (abs(aspect - 4.0f/3.0f) < 0.1f) {
+        std::cout << "Detected cross layout cubemap (aspect: " << aspect << ")" << std::endl;
         return loadCrossLayout(data, width, height);
     } else {
-        std::cout << "Using image as equirectangular environment map" << std::endl;
+        std::cout << "Unknown format, trying equirectangular (aspect: " << aspect << ")" << std::endl;
         return loadEquirectangular(data, width, height);
     }
 }
@@ -233,31 +244,32 @@ bool Cubemap::loadCrossLayout(float* data, int width, int height) {
 }
 
 bool Cubemap::loadEquirectangular(float* data, int width, int height) {
-    // For now, use the simple approach of mapping the equirectangular to all faces
-    m_size = 512; // Fixed size for generated faces
+    // Convert equirectangular to cubemap faces
+    m_size = 512; // Fixed size for generated cube faces
     
     for (int face = 0; face < 6; face++) {
         m_faces[face].width = m_size;
         m_faces[face].height = m_size;
         m_faces[face].data.resize(m_size * m_size);
         
-        // Sample from the equirectangular image
+        // Generate each face by sampling the equirectangular image
         for (int y = 0; y < m_size; y++) {
             for (int x = 0; x < m_size; x++) {
-                // Convert face coordinates to direction
-                float u = (float)x / (float)(m_size - 1);
-                float v = (float)y / (float)(m_size - 1);
+                // Convert face pixel to 3D direction
+                glm::vec3 direction = faceCoordToDirection(face, x, y, m_size);
                 
-                // Convert to world direction (simplified)
-                float theta = u * 2.0f * 3.14159f;
-                float phi = v * 3.14159f;
+                // Convert 3D direction to equirectangular UV coordinates
+                float theta = atan2(direction.z, direction.x); // Azimuth
+                float phi = acos(direction.y); // Elevation
                 
-                float srcX = theta / (2.0f * 3.14159f) * width;
-                float srcY = phi / 3.14159f * height;
+                // Convert to UV coordinates [0,1]
+                float u = (theta + M_PI) / (2.0f * M_PI);
+                float v = phi / M_PI;
                 
-                int iX = (int)srcX % width;
-                int iY = (int)srcY % height;
-                int srcIdx = (iY * width + iX) * 3;
+                // Sample from equirectangular image with bounds checking
+                int srcX = glm::clamp((int)(u * width), 0, width - 1);
+                int srcY = glm::clamp((int)(v * height), 0, height - 1);
+                int srcIdx = (srcY * width + srcX) * 3;
                 
                 m_faces[face].data[y * m_size + x] = glm::vec3(
                     data[srcIdx + 0],
@@ -271,4 +283,39 @@ bool Cubemap::loadEquirectangular(float* data, int width, int height) {
     stbi_image_free(data);
     m_loaded = true;
     return true;
+}
+
+// Helper function to convert face coordinates to 3D direction
+glm::vec3 Cubemap::faceCoordToDirection(int face, int x, int y, int size) const {
+    // Convert pixel coordinates to [-1, 1] range
+    float u = (2.0f * x / (size - 1)) - 1.0f;
+    float v = (2.0f * y / (size - 1)) - 1.0f;
+    
+    glm::vec3 direction;
+    
+    switch (face) {
+        case 0: // +X
+            direction = glm::vec3(1.0f, -v, -u);
+            break;
+        case 1: // -X
+            direction = glm::vec3(-1.0f, -v, u);
+            break;
+        case 2: // +Y
+            direction = glm::vec3(u, 1.0f, v);
+            break;
+        case 3: // -Y
+            direction = glm::vec3(u, -1.0f, -v);
+            break;
+        case 4: // +Z
+            direction = glm::vec3(u, -v, 1.0f);
+            break;
+        case 5: // -Z
+            direction = glm::vec3(-u, -v, -1.0f);
+            break;
+        default:
+            direction = glm::vec3(0.0f, 1.0f, 0.0f);
+            break;
+    }
+    
+    return glm::normalize(direction);
 }

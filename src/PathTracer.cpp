@@ -23,7 +23,7 @@ PathTracer::PathTracer(const Settings& settings) : m_settings(settings) {
     setupDefaultMaterials();
     
     // Try to load cubemap (should auto-detect cross layout)
-    if (!loadCubemap("assets/Cubemap/Cubemap_Sky_04-512x512.png")) {
+    if (!loadCubemap("assets/Cubemap/derelict_airfield_02_4k.hdr")) {
         std::cout << "Failed to load cubemap, using procedural sky" << std::endl;
     }
 }

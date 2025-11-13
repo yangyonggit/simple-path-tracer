@@ -37,6 +37,7 @@ private:
     glm::vec3 sampleFace(int face, float u, float v) const;
     void directionToUV(const glm::vec3& dir, int& face, float& u, float& v) const;
     glm::vec3 bilinearSample(const Face& face, float u, float v) const;
+    glm::vec3 faceCoordToDirection(int face, int x, int y, int size) const;
     
     // Cross layout and equirectangular loading
     bool loadCrossLayout(float* data, int width, int height);
