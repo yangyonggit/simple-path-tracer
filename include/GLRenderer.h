@@ -30,6 +30,7 @@ private:
     
     // Input state
     bool m_keys[1024] = {false};
+    bool m_mouse_buttons[8] = {false};  // Track mouse button states
     bool m_first_mouse = true;
     float m_last_x = IMAGE_WIDTH / 2.0f;
     float m_last_y = IMAGE_HEIGHT / 2.0f;
@@ -81,6 +82,7 @@ private:
     // GLFW callbacks (static)
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mode);
     static void mouseCallback(GLFWwindow* window, double xpos, double ypos);
+    static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
     static void errorCallback(int error, const char* description);
     static void framebufferSizeCallback(GLFWwindow* window, int width, int height);
 };

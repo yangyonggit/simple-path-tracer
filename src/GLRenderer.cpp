@@ -97,6 +97,7 @@ GLuint GLRenderer::createTexture() {
 void GLRenderer::setupCallbacks() {
     glfwSetKeyCallback(m_window, keyCallback);
     glfwSetCursorPosCallback(m_window, mouseCallback);
+    glfwSetMouseButtonCallback(m_window, mouseButtonCallback);
 }
 
 void GLRenderer::renderLoop(EmbreeScene& embree_scene, Camera& camera, PathTracer& path_tracer) {
@@ -228,6 +229,9 @@ void GLRenderer::keyCallback(GLFWwindow* window, int key, int scancode, int acti
 void GLRenderer::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
     if (!s_instance || !s_instance->m_camera) return;
     
+    // Only process mouse movement if left mouse button is pressed
+    if (!s_instance->m_mouse_buttons[GLFW_MOUSE_BUTTON_LEFT]) return;
+    
     if (s_instance->m_first_mouse) {
         s_instance->m_last_x = static_cast<float>(xpos);
         s_instance->m_last_y = static_cast<float>(ypos);
@@ -240,6 +244,22 @@ void GLRenderer::mouseCallback(GLFWwindow* window, double xpos, double ypos) {
     s_instance->m_last_y = static_cast<float>(ypos);
     
     s_instance->m_camera->processMouseMovement(xoffset, yoffset);
+}
+
+void GLRenderer::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    if (!s_instance) return;
+    
+    if (button >= 0 && button < 8) {
+        if (action == GLFW_PRESS) {
+            s_instance->m_mouse_buttons[button] = true;
+            // Reset first mouse when starting to drag
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                s_instance->m_first_mouse = true;
+            }
+        } else if (action == GLFW_RELEASE) {
+            s_instance->m_mouse_buttons[button] = false;
+        }
+    }
 }
 
 void GLRenderer::errorCallback(int error, const char* description) {
