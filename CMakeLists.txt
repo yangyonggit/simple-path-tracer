@@ -27,6 +27,8 @@ add_executable(${PROJECT_NAME}
     src/PathTracer.cpp
     src/Light.cpp
     src/Material.cpp
+    src/MaterialManager.cpp
+    src/EnvironmentManager.cpp
     src/Cubemap.cpp
     src/GLTFLoader.cpp
     src/MeshIntegrator.cpp

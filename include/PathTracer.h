@@ -6,8 +6,8 @@
 #include <vector>
 #include <atomic>
 #include "Light.h"
-#include "Material.h"
-#include "Cubemap.h"
+#include "MaterialManager.h"
+#include "EnvironmentManager.h"
 
 // Forward declaration
 class Camera;
@@ -25,8 +25,8 @@ public:
 private:
     Settings m_settings;
     LightManager m_light_manager;
-    std::vector<Material> m_materials;
-    Cubemap m_cubemap;
+    MaterialManager m_material_manager;
+    EnvironmentManager m_environment_manager;
     
     // Random number generation (thread local)
     thread_local static std::mt19937 s_rng;
@@ -39,30 +39,31 @@ private:
     static glm::vec3 randomUnitHemisphere(const glm::vec3& normal);
     static glm::vec3 cosineHemisphereSample(const glm::vec3& normal);
     
-    // Material functions
-    static glm::vec3 getColorFromGeometryID(int geomID);
-    static glm::vec3 getMaterialAlbedo(int geomID);
-    
-    // Material management (private helper)
-    const Material& getMaterialByID(int geomID) const;
-    const Material& getMaterialFromHit(RTCScene scene, const RTCRayHit& rayhit) const;
-    void setupDefaultMaterials();
-    
-    // Environment/Sky functions
-    static glm::vec3 getSkyColor(const glm::vec3& direction);
-    glm::vec3 getCubemapColor(const glm::vec3& direction) const;
-    
-    // Advanced tone mapping
-    static glm::vec3 acesToneMapping(const glm::vec3& color);
-    
-    // Cubemap management
-    bool loadCubemap(const std::string& filename);
+    // Core ray intersection and tracing helpers
+    bool intersectRay(RTCScene scene, const glm::vec3& origin, const glm::vec3& direction,
+                     RTCRayHit& rayhit) const;
+    glm::vec3 calculateSafeRayOrigin(const glm::vec3& hit_point, const glm::vec3& normal, 
+                                    bool offset_forward = true) const;
     
     // Core tracing functions
     glm::vec3 tracePathMonteCarlo(RTCScene scene, const glm::vec3& origin, 
                                  const glm::vec3& direction, int depth) const;
     glm::vec3 traceRaySimple(RTCScene scene, const glm::vec3& origin, 
                             const glm::vec3& direction) const;
+    
+    // Path tracing helper functions
+    glm::vec3 calculateDirectLighting(RTCScene scene, const glm::vec3& hit_point,
+                                     const glm::vec3& normal, const glm::vec3& view_dir,
+                                     const Material& material, int depth) const;
+    glm::vec3 calculateMetallicIndirectLighting(RTCScene scene, const glm::vec3& hit_point,
+                                               const glm::vec3& normal, const glm::vec3& view_dir,
+                                               const Material& material, int depth) const;
+    glm::vec3 calculateTransparentIndirectLighting(RTCScene scene, const glm::vec3& hit_point,
+                                                  const glm::vec3& normal, const glm::vec3& view_dir,
+                                                  const Material& material, int depth) const;
+    glm::vec3 calculateDielectricIndirectLighting(RTCScene scene, const glm::vec3& hit_point,
+                                                 const glm::vec3& normal, const glm::vec3& view_dir,
+                                                 const Material& material, int depth) const;
 
 public:
     PathTracer(const Settings& settings = Settings{});
@@ -85,11 +86,13 @@ public:
     LightManager& getLightManager() { return m_light_manager; }
     const LightManager& getLightManager() const { return m_light_manager; }
     
-    // Material management  
-    void addMaterial(const Material& material) { m_materials.push_back(material); }
-    void setMaterial(int index, const Material& material);
-    const Material& getMaterial(int index) const;
-    size_t getMaterialCount() const { return m_materials.size(); }
+    // Material management
+    MaterialManager& getMaterialManager() { return m_material_manager; }
+    const MaterialManager& getMaterialManager() const { return m_material_manager; }
+    
+    // Environment management
+    EnvironmentManager& getEnvironmentManager() { return m_environment_manager; }
+    const EnvironmentManager& getEnvironmentManager() const { return m_environment_manager; }
     
     // Utility functions
     static void initializeRandomSeed();
