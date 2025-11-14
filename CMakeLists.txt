@@ -29,6 +29,7 @@ add_executable(${PROJECT_NAME}
     src/Material.cpp
     src/MaterialManager.cpp
     src/EnvironmentManager.cpp
+    src/GLRenderer.cpp
     src/Cubemap.cpp
     src/GLTFLoader.cpp
     src/MeshIntegrator.cpp

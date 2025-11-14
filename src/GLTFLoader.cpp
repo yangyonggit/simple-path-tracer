@@ -6,9 +6,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #define TINYGLTF_IMPLEMENTATION
-// Do not define STB implementations here as they are already defined in other files
-// #define STB_IMAGE_IMPLEMENTATION
-// #define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 // Disable JSON schema validation to avoid dependency issues
 #define TINYGLTF_NO_JSON_SCHEMA
 #include "tiny_gltf.h"
