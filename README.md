@@ -3,7 +3,7 @@
 A real-time path tracing renderer built with Intel Embree 4, featuring physically-based rendering, parallel processing, and interactive camera controls.
 
 ## Features
-
+![](./images/DefaultScene.png)
 ### Core Rendering
 - **Monte Carlo Path Tracing** - Physically accurate light transport simulation
 - **Intel Embree 4** - High-performance ray tracing acceleration
