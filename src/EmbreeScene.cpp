@@ -17,11 +17,19 @@ EmbreeScene::EmbreeScene() : m_device(nullptr), m_scene(nullptr) {
     initialize();
 }
 
+EmbreeScene::EmbreeScene(bool loadDefaultScene) : m_device(nullptr), m_scene(nullptr) {
+    initialize(loadDefaultScene);
+}
+
 EmbreeScene::~EmbreeScene() {
     cleanup();
 }
 
 void EmbreeScene::initialize() {
+    initialize(true); // Load default scene by default
+}
+
+void EmbreeScene::initialize(bool loadDefaultScene) {
     // Create Embree device
     m_device = rtcNewDevice(nullptr);
     if (!m_device) {
@@ -43,45 +51,50 @@ void EmbreeScene::initialize() {
     m_meshIntegrator = std::make_unique<MeshIntegrator>(m_device, m_scene);
     std::cout << "GLTF components initialized successfully.\n";
     
-    // Reserve space for all geometry to ensure no reallocation
-    m_spheres.reserve(8);  // 8 spheres + 1 cube
-    
-    // Metal spheres - front row
-    addSphereWithMaterial(0, glm::vec3(-3.0f, 1.0f, 0.0f), 1.0f);  // Gold
-    addSphereWithMaterial(1, glm::vec3(-1.0f, 1.0f, 0.0f), 1.0f);  // Silver  
-    addSphereWithMaterial(2, glm::vec3(1.0f, 1.0f, 0.0f), 1.0f);   // Copper
-    addSphereWithMaterial(3, glm::vec3(3.0f, 1.0f, 0.0f), 1.0f);   // Iron
-    
-    // Glass cube - middle position
-    addCubeWithMaterial(4, glm::vec3(0.0f, 1.0f, 2.0f), 1.5f);    // Glass Cube
-    
-    // Dielectric spheres - back row
-    addSphereWithMaterial(5, glm::vec3(-2.0f, 1.0f, -2.0f), 1.0f); // Plastic
-    addSphereWithMaterial(6, glm::vec3(0.0f, 1.0f, -2.0f), 1.0f);  // Rubber
-    
-    // Mixed material spheres - back row right
-    addSphereWithMaterial(7, glm::vec3(2.0f, 1.0f, -2.0f), 1.0f);  // Wood
-    addSphereWithMaterial(8, glm::vec3(0.0f, 1.0f, -4.0f), 1.0f);  // Concrete
-    
-    // Commit scene after basic geometry to update BVH first
-    rtcCommitScene(m_scene);
-    
-    std::cout << "EmbreeScene initialized successfully with 8 spheres and 1 glass cube (no ground plane).\n";
-    
-    // Add GLTF model after all basic geometry is created and committed
-    if (m_gltfLoader && m_meshIntegrator) {
-        // Create a transform matrix to position the GLTF model
-        glm::mat4 gltfTransform = glm::mat4(1.0f);
-        gltfTransform = glm::translate(gltfTransform, glm::vec3(5.0f, 0.5f, 0.0f)); // Lower position
-        gltfTransform = glm::scale(gltfTransform, glm::vec3(5.0f)); // Scale to 5x size
+    // Only load default scene if requested
+    if (loadDefaultScene) {
+        // Reserve space for all geometry to ensure no reallocation
+        m_spheres.reserve(8);  // 8 spheres + 1 cube
         
-        // Load GLTF file with real parsing, use copper material (material ID 2) - very visible metal
-        if (loadGLTFWithTransform("assets/models/rattan_dining_chair/scene.gltf", gltfTransform, 2)) { // Use copper material (material ID 2)
-            std::cout << "Added GLTF model at position (5, 0.5, 0) with copper material and 5x scale.\n";
-        } else {
-            std::cout << "Note: GLTF model loading failed.\n";
+        // Metal spheres - front row
+        addSphereWithMaterial(0, glm::vec3(-3.0f, 1.0f, 0.0f), 1.0f);  // Gold
+        addSphereWithMaterial(1, glm::vec3(-1.0f, 1.0f, 0.0f), 1.0f);  // Silver  
+        addSphereWithMaterial(2, glm::vec3(1.0f, 1.0f, 0.0f), 1.0f);   // Copper
+        addSphereWithMaterial(3, glm::vec3(3.0f, 1.0f, 0.0f), 1.0f);   // Iron
+        
+        // Glass cube - middle position
+        addCubeWithMaterial(4, glm::vec3(0.0f, 1.0f, 2.0f), 1.5f);    // Glass Cube
+        
+        // Dielectric spheres - back row
+        addSphereWithMaterial(5, glm::vec3(-2.0f, 1.0f, -2.0f), 1.0f); // Plastic
+        addSphereWithMaterial(6, glm::vec3(0.0f, 1.0f, -2.0f), 1.0f);  // Rubber
+        
+        // Mixed material spheres - back row right
+        addSphereWithMaterial(7, glm::vec3(2.0f, 1.0f, -2.0f), 1.0f);  // Wood
+        addSphereWithMaterial(8, glm::vec3(0.0f, 1.0f, -4.0f), 1.0f);  // Concrete
+        
+        std::cout << "EmbreeScene initialized successfully with 8 spheres and 1 glass cube (no ground plane).\n";
+        
+        // Add GLTF model after all basic geometry is created and committed  
+        if (m_gltfLoader && m_meshIntegrator) {
+            // Create a transform matrix to position the GLTF model
+            glm::mat4 gltfTransform = glm::mat4(1.0f);
+            gltfTransform = glm::translate(gltfTransform, glm::vec3(5.0f, 0.5f, 0.0f)); // Lower position
+            gltfTransform = glm::scale(gltfTransform, glm::vec3(5.0f)); // Scale to 5x size
+            
+            // Load GLTF file with real parsing, use copper material (material ID 2) - very visible metal
+            if (loadGLTFWithTransform("assets/models/rattan_dining_chair/scene.gltf", gltfTransform, 2)) { // Use copper material (material ID 2)
+                std::cout << "Added GLTF model at position (5, 0.5, 0) with copper material and 5x scale.\n";
+            } else {
+                std::cout << "Note: GLTF model loading failed.\n";
+            }
         }
+    } else {
+        std::cout << "EmbreeScene initialized for custom scene (no default objects).\n";
     }
+    
+    // Commit scene after geometry setup
+    rtcCommitScene(m_scene);
 }
 
 void EmbreeScene::addGroundPlane() {
@@ -414,6 +427,16 @@ void EmbreeScene::addCubeWithMaterial(unsigned int materialID, const glm::vec3& 
     rtcCommitGeometry(geometry);
     rtcAttachGeometry(m_scene, geometry);
     rtcReleaseGeometry(geometry);
+}
+
+// Public GLTF loading interface
+bool EmbreeScene::loadGLTF(const std::string& filepath, const glm::vec3& position, float scale, unsigned int materialID) {
+    // Create transformation matrix from position and scale
+    glm::mat4 transform = glm::mat4(1.0f);
+    transform = glm::translate(transform, position);
+    transform = glm::scale(transform, glm::vec3(scale));
+    
+    return loadGLTFWithTransform(filepath, transform, materialID);
 }
 
 bool EmbreeScene::loadGLTF(const std::string& filepath, unsigned int materialID) {

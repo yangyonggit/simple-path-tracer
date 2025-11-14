@@ -42,6 +42,7 @@ private:
     
 public:
     EmbreeScene();
+    EmbreeScene(bool loadDefaultScene);
     ~EmbreeScene();
     
     // Non-copyable
@@ -56,8 +57,12 @@ public:
         return m_device != nullptr && m_scene != nullptr;
     }
     
+    // GLTF mesh loading (public interface)
+    bool loadGLTF(const std::string& filepath, const glm::vec3& position = glm::vec3(0.0f), float scale = 1.0f, unsigned int materialID = 0);
+    
 private:
     void initialize();
+    void initialize(bool loadDefaultScene);
     void addGroundPlane();
     void addTestBox();
     void addCube();

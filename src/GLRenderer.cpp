@@ -137,7 +137,7 @@ void GLRenderer::renderLoop(EmbreeScene& embree_scene, Camera& camera, PathTrace
         
         // Optional: Display progress info every second
         static float last_info_time = 0.0f;
-        if (glfwGetTime() - last_info_time > 1.0f) {
+        if (glfwGetTime() - last_info_time > 5.0f) {
             std::cout << "Samples: " << m_accumulated_samples << ", FPS: " << (1.0f / m_delta_time) << std::endl;
             last_info_time = static_cast<float>(glfwGetTime());
         }
