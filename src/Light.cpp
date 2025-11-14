@@ -2,6 +2,7 @@
 #include <embree4/rtcore.h>
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -123,11 +124,11 @@ glm::vec3 LightManager::calculateDirectLighting(const glm::vec3& hit_point, cons
     return total_lighting;
 }
 
-const Light* LightManager::getLight(size_t index) const {
-    if (index < m_lights.size()) {
-        return m_lights[index].get();
+const Light& LightManager::getLight(size_t index) const {
+    if (index >= m_lights.size()) {
+        throw std::out_of_range("Light index out of range");
     }
-    return nullptr;
+    return *m_lights[index];
 }
 
 void LightManager::clearLights() {

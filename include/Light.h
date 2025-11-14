@@ -100,6 +100,6 @@ public:
     
     // Accessors
     size_t getLightCount() const { return m_lights.size(); }
-    const Light* getLight(size_t index) const;
+    const Light& getLight(size_t index) const;
     void clearLights();
 };

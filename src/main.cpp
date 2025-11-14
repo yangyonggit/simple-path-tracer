@@ -100,11 +100,11 @@ void setupPathTracerWithLights(PathTracer& path_tracer) {
     LightManager& light_manager = path_tracer.getLightManager();
     
     // Add a directional light (like sun)
-    // light_manager.addDirectionalLight(
-    //     glm::vec3(-0.5f, -1.0f, 0.3f), // Direction: from above and slightly to the side
-    //     glm::vec3(1.0f, 0.95f, 0.8f),  // Warm white color
-    //     2.0f                           // Intensity
-    // );
+    light_manager.addDirectionalLight(
+        glm::vec3(-0.5f, -1.0f, 0.3f), // Direction: from above and slightly to the side
+        glm::vec3(1.0f, 0.95f, 0.8f),  // Warm white color
+        2.0f                           // Intensity
+    );
     
     // // Add a point light above the scene
     // light_manager.addPointLight(

@@ -274,17 +274,17 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
     
     // Sample all lights for direct lighting
     for (size_t i = 0; i < lights.getLightCount(); ++i) {
-        const Light* light = lights.getLight(i);
-        if (!light) continue;
+        const Light& light = lights.getLight(i);
+        
         
         glm::vec3 light_direction;
         float light_distance;
-        glm::vec3 light_radiance = light->getRadiance(hit_point, normal, light_direction, light_distance);
+        glm::vec3 light_radiance = light.getRadiance(hit_point, normal, light_direction, light_distance);
         
         float cos_theta = glm::max(glm::dot(normal, light_direction), 0.0f);
         if (cos_theta > 0.0f) {
             // Check for shadows
-            bool occluded = light->isOccluded(hit_point, normal, light_direction, light_distance, scene);
+            bool occluded = light.isOccluded(hit_point, normal, light_direction, light_distance, scene);
             if (!occluded) {
                 // Use Cook-Torrance BRDF for realistic shading with enhanced view dependency
                 glm::vec3 brdf = material.evaluateBRDF(normal, view_dir, light_direction);
@@ -458,17 +458,17 @@ glm::vec3 PathTracer::traceRaySimple(RTCScene scene, const glm::vec3& origin,
     
     // Sample all lights for direct lighting
     for (size_t i = 0; i < lights.getLightCount(); ++i) {
-        const Light* light = lights.getLight(i);
-        if (!light) continue;
+        const Light& light = lights.getLight(i);
+        
         
         glm::vec3 light_direction;
         float light_distance;
-        glm::vec3 light_radiance = light->getRadiance(hit_point, normal, light_direction, light_distance);
+        glm::vec3 light_radiance = light.getRadiance(hit_point, normal, light_direction, light_distance);
         
         float cos_theta = glm::max(glm::dot(normal, light_direction), 0.0f);
         if (cos_theta > 0.0f) {
             // Check for shadows
-            bool occluded = light->isOccluded(hit_point, normal, light_direction, light_distance, scene);
+            bool occluded = light.isOccluded(hit_point, normal, light_direction, light_distance, scene);
             if (!occluded) {
                 // Use Cook-Torrance BRDF
                 glm::vec3 brdf = material.evaluateBRDF(normal, view_dir, light_direction);
