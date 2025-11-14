@@ -112,7 +112,7 @@ void GLTFLoader::assignMaterial(size_t meshIndex, unsigned int materialID) {
 void GLTFLoader::createTestCube() {
     Mesh cube;
     
-    // Cube vertices
+    // Cube vertices - use emplace_back for better performance
     cube.vertices = {
         // Front face
         {-1.0f, -1.0f,  1.0f},
@@ -151,7 +151,7 @@ void GLTFLoader::createTestCube() {
         {-1.0f,  1.0f, -1.0f}
     };
     
-    // Cube indices
+    // Cube indices - use assignment for better performance
     cube.indices = {
         0,  1,  2,   0,  2,  3,    // front
         4,  5,  6,   4,  6,  7,    // back
@@ -172,7 +172,7 @@ void GLTFLoader::createTestCube() {
     
     cube.materialID = 0; // Default material
     
-    m_meshes.push_back(cube);
+    m_meshes.push_back(std::move(cube));
 }
 
 void GLTFLoader::calculateNormals(Mesh& mesh) {
@@ -237,9 +237,9 @@ void GLTFLoader::processMesh(const tinygltf::Model& model, const tinygltf::Mesh&
             const float* positions = reinterpret_cast<const float*>(
                 &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
             
-            mesh.vertices.resize(accessor.count);
+            mesh.vertices.reserve(accessor.count);
             for (size_t i = 0; i < accessor.count; ++i) {
-                mesh.vertices[i] = glm::vec3(
+                mesh.vertices.emplace_back(
                     positions[i * 3 + 0],
                     positions[i * 3 + 1], 
                     positions[i * 3 + 2]
@@ -257,9 +257,9 @@ void GLTFLoader::processMesh(const tinygltf::Model& model, const tinygltf::Mesh&
             const float* normals = reinterpret_cast<const float*>(
                 &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
             
-            mesh.normals.resize(accessor.count);
+            mesh.normals.reserve(accessor.count);
             for (size_t i = 0; i < accessor.count; ++i) {
-                mesh.normals[i] = glm::vec3(
+                mesh.normals.emplace_back(
                     normals[i * 3 + 0],
                     normals[i * 3 + 1],
                     normals[i * 3 + 2]
@@ -277,9 +277,9 @@ void GLTFLoader::processMesh(const tinygltf::Model& model, const tinygltf::Mesh&
             const float* texcoords = reinterpret_cast<const float*>(
                 &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
             
-            mesh.texcoords.resize(accessor.count);
+            mesh.texcoords.reserve(accessor.count);
             for (size_t i = 0; i < accessor.count; ++i) {
-                mesh.texcoords[i] = glm::vec2(
+                mesh.texcoords.emplace_back(
                     texcoords[i * 2 + 0],
                     texcoords[i * 2 + 1]
                 );
@@ -292,25 +292,25 @@ void GLTFLoader::processMesh(const tinygltf::Model& model, const tinygltf::Mesh&
             const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
             const tinygltf::Buffer& buffer = model.buffers[bufferView.buffer];
             
-            mesh.indices.resize(accessor.count);
+            mesh.indices.reserve(accessor.count);
             
             if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT) {
                 const uint16_t* indices = reinterpret_cast<const uint16_t*>(
                     &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
                 for (size_t i = 0; i < accessor.count; ++i) {
-                    mesh.indices[i] = static_cast<unsigned int>(indices[i]);
+                    mesh.indices.push_back(static_cast<unsigned int>(indices[i]));
                 }
             } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT) {
                 const uint32_t* indices = reinterpret_cast<const uint32_t*>(
                     &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
                 for (size_t i = 0; i < accessor.count; ++i) {
-                    mesh.indices[i] = indices[i];
+                    mesh.indices.push_back(indices[i]);
                 }
             } else if (accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE) {
                 const uint8_t* indices = reinterpret_cast<const uint8_t*>(
                     &buffer.data[bufferView.byteOffset + accessor.byteOffset]);
                 for (size_t i = 0; i < accessor.count; ++i) {
-                    mesh.indices[i] = static_cast<unsigned int>(indices[i]);
+                    mesh.indices.push_back(static_cast<unsigned int>(indices[i]));
                 }
             }
         }
@@ -329,7 +329,7 @@ void GLTFLoader::processMesh(const tinygltf::Model& model, const tinygltf::Mesh&
         }
         
         mesh.materialID = 0; // Default material (will be assigned later)
-        m_meshes.push_back(mesh);
+        m_meshes.push_back(std::move(mesh));
     }
 }
 

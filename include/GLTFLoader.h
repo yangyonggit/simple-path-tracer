@@ -25,7 +25,34 @@ struct Mesh {
     // Assigned material ID in our system
     unsigned int materialID;
     
+    // Default constructor
     Mesh() : transform(1.0f), materialID(0) {}
+    
+    // Move constructor
+    Mesh(Mesh&& other) noexcept
+        : vertices(std::move(other.vertices)),
+          normals(std::move(other.normals)),
+          texcoords(std::move(other.texcoords)),
+          indices(std::move(other.indices)),
+          transform(other.transform),
+          materialID(other.materialID) {}
+    
+    // Move assignment operator
+    Mesh& operator=(Mesh&& other) noexcept {
+        if (this != &other) {
+            vertices = std::move(other.vertices);
+            normals = std::move(other.normals);
+            texcoords = std::move(other.texcoords);
+            indices = std::move(other.indices);
+            transform = other.transform;
+            materialID = other.materialID;
+        }
+        return *this;
+    }
+    
+    // Copy constructor and copy assignment - explicitly defaulted
+    Mesh(const Mesh& other) = default;
+    Mesh& operator=(const Mesh& other) = default;
 };
 
 class GLTFLoader {

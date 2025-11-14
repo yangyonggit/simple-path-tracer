@@ -14,6 +14,21 @@ public:
         float center_x, center_y, center_z;
         float radius;
         unsigned int materialID;
+        
+        // Default constructor
+        SphereData() = default;
+        
+        // Constructor with parameters
+        SphereData(float cx, float cy, float cz, float r, unsigned int matID)
+            : center_x(cx), center_y(cy), center_z(cz), radius(r), materialID(matID) {}
+        
+        // Move constructor and assignment (for improved performance)
+        SphereData(SphereData&& other) noexcept = default;
+        SphereData& operator=(SphereData&& other) noexcept = default;
+        
+        // Copy constructor and assignment
+        SphereData(const SphereData& other) = default;
+        SphereData& operator=(const SphereData& other) = default;
     };
 
 private:

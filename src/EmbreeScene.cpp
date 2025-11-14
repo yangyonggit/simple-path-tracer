@@ -186,16 +186,8 @@ void EmbreeScene::addSphereWithMaterial(unsigned int materialID, const glm::vec3
     // Create a user-defined geometry for analytical sphere
     RTCGeometry geometry = rtcNewGeometry(m_device, RTC_GEOMETRY_TYPE_USER);
     
-    // Create sphere data directly
-    SphereData sphere;
-    sphere.center_x = position.x;
-    sphere.center_y = position.y;
-    sphere.center_z = position.z;
-    sphere.radius = radius;
-    sphere.materialID = materialID;
-    
-    // Store sphere in vector for bookkeeping
-    m_spheres.push_back(sphere);
+    // Create sphere data using emplace_back for better performance
+    m_spheres.emplace_back(position.x, position.y, position.z, radius, materialID);
     
     // Use pointer to element in vector (safe since we reserve space and don't resize)
     rtcSetGeometryUserData(geometry, &m_spheres.back());

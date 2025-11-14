@@ -54,10 +54,9 @@ bool MeshIntegrator::addAllMeshes(const GLTFLoader& loader) {
     }
     
     bool success = true;
-    for (size_t i = 0; i < meshes.size(); ++i) {
-        const Mesh& mesh = meshes[i];
+    for (const auto& mesh : meshes) {
         if (!addMeshToScene(mesh, mesh.materialID)) {
-            std::cerr << "Failed to add mesh " << i << " to scene" << std::endl;
+            std::cerr << "Failed to add mesh to scene" << std::endl;
             success = false;
         }
     }
@@ -126,9 +125,11 @@ RTCGeometry MeshIntegrator::createEmbreeGeometry(const Mesh& mesh) {
 }
 
 void MeshIntegrator::updateMaterialMapping(unsigned int geomID, unsigned int materialID) {
-    // Ensure the mapping vector is large enough
+    // Ensure the mapping vector is large enough - reserve space if needed
     if (geomID >= m_materialMapping.size()) {
-        m_materialMapping.resize(geomID + 1, 0);
+        size_t newSize = geomID + 1;
+        m_materialMapping.reserve(newSize + 10); // Reserve a bit extra to avoid frequent reallocations
+        m_materialMapping.resize(newSize, 0);
     }
     
     m_materialMapping[geomID] = materialID;
