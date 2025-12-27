@@ -85,7 +85,8 @@ private:
     // Rendering
     void renderFrame(const std::vector<unsigned char>& image);
     void renderWavefront(std::vector<unsigned char>& image, const Camera& camera, 
-                        RTCScene scene, PathTracer& path_tracer);
+                        RTCScene scene, PathTracer& path_tracer,
+                        std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples);
     void updateTiming();
     void processInput();
     bool hasCameraMoved();
