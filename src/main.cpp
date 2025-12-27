@@ -73,6 +73,7 @@ void showHelp(const char* program_name) {
     std::cout << "CONTROLS:" << std::endl;
     std::cout << "  WASD      - Move camera" << std::endl;
     std::cout << "  Mouse     - Look around" << std::endl;
+    std::cout << "  T         - Toggle Wavefront integrator test (CPU)" << std::endl;
     std::cout << "  ESC       - Exit" << std::endl;
     std::cout << std::endl;
 }

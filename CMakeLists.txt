@@ -2,12 +2,14 @@ cmake_minimum_required(VERSION 3.20)
 
 # Set vcpkg toolchain
 set(CMAKE_TOOLCHAIN_FILE "d:/git/vcpkg/scripts/buildsystems/vcpkg.cmake")
-
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL
+    "Generate compile_commands.json for clangd" FORCE)
 project(simple-path-tracer)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 
 
 # Find packages
@@ -33,11 +35,13 @@ add_executable(${PROJECT_NAME}
     src/Cubemap.cpp
     src/GLTFLoader.cpp
     src/MeshIntegrator.cpp
+    src/wavefront/wf_integrator_cpu.cpp
 )
 
 # Add include directories
 target_include_directories(${PROJECT_NAME} PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/wavefront
     ${Stb_INCLUDE_DIR}
     ${TINYGLTF_INCLUDE_DIRS}
 )

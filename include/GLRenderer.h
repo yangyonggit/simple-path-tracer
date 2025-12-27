@@ -27,6 +27,7 @@ private:
     int m_accumulated_samples = 0;
     bool m_camera_moved = true;
     std::atomic<int> m_tiles_completed{0};
+    bool m_test_wavefront = false;  // Flag to test wavefront integrator
     
     // Input state
     bool m_keys[1024] = {false};

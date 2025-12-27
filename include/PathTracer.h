@@ -66,7 +66,7 @@ private:
                                                  const Material& material, int depth) const;
 
 public:
-    PathTracer(const Settings& settings = Settings{});
+    PathTracer(const Settings& settings);
     
     // Main tracing interface
     glm::vec3 traceRay(RTCScene scene, const glm::vec3& origin, 

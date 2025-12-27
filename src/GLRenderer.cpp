@@ -1,6 +1,7 @@
 #include "GLRenderer.h"
 #include "Camera.h"
 #include "PathTracer.h"
+#include "wavefront/wf_integrator_cpu.h"
 #include "EmbreeScene.h"
 #include <iostream>
 #include <algorithm>
@@ -127,10 +128,28 @@ void GLRenderer::renderLoop(EmbreeScene& embree_scene, Camera& camera, PathTrace
         // Increment sample count
         ++m_accumulated_samples;
         
-        // Render image using PathTracer's parallel processing
-        path_tracer.renderImage(image, IMAGE_WIDTH, IMAGE_HEIGHT, camera, embree_scene.getScene(),
-                               m_accumulation_buffer, m_accumulated_samples,
-                               m_camera_moved, m_tiles_completed);
+        // Test wavefront integrator if enabled
+        if (m_test_wavefront) {
+            static wf::WavefrontIntegratorCPU wf_integrator;
+            wf::RenderParams params;
+            params.width = IMAGE_WIDTH;
+            params.height = IMAGE_HEIGHT;
+            params.spp = 1;
+            params.max_bounce = 5;
+            
+            std::vector<float> out_rgb;
+            wf_integrator.render(params, out_rgb);
+            
+            // Convert float RGB to unsigned char for display
+            for (size_t i = 0; i < out_rgb.size() && i < image.size(); ++i) {
+                image[i] = static_cast<unsigned char>(std::clamp(out_rgb[i] * 255.0f, 0.0f, 255.0f));
+            }
+        } else {
+            // Render image using PathTracer's parallel processing
+            path_tracer.renderImage(image, IMAGE_WIDTH, IMAGE_HEIGHT, camera, embree_scene.getScene(),
+                                   m_accumulation_buffer, m_accumulated_samples,
+                                   m_camera_moved, m_tiles_completed);
+        }
         
         // Render to OpenGL
         renderFrame(image);
@@ -215,6 +234,12 @@ void GLRenderer::keyCallback(GLFWwindow* window, int key, int scancode, int acti
     
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
         glfwSetWindowShouldClose(window, GL_TRUE);
+    }
+    
+    // Toggle wavefront integrator test with 'T' key
+    if (key == GLFW_KEY_T && action == GLFW_PRESS) {
+        s_instance->m_test_wavefront = !s_instance->m_test_wavefront;
+        std::cout << "Wavefront integrator test: " << (s_instance->m_test_wavefront ? "ON" : "OFF") << std::endl;
     }
     
     if (key >= 0 && key < 1024) {
