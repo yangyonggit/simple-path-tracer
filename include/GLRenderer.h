@@ -6,6 +6,8 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
 
 struct RTCSceneTy;
 typedef RTCSceneTy* RTCScene;
@@ -90,6 +92,12 @@ private:
     void updateTiming();
     void processInput();
     bool hasCameraMoved();
+    
+    // Wavefront tile rendering
+    static void renderWavefrontTileTask(int tileIndex, std::vector<unsigned char>& image,
+                                       int width, int height, const Camera& camera, RTCScene scene,
+                                       const GLRenderer& renderer, PathTracer& path_tracer, int numTilesX, int numTilesY,
+                                       std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples);
     
     // GLFW callbacks (static)
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mode);

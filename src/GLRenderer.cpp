@@ -292,30 +292,60 @@ void GLRenderer::framebufferSizeCallback(GLFWwindow* window, int width, int heig
 void GLRenderer::renderWavefront(std::vector<unsigned char>& image, const Camera& camera,
                                  RTCScene scene, PathTracer& path_tracer,
                                  std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples) {
-    // Setup wavefront context
+    constexpr int TILE_SIZE = 32;  // Match the tile size from PathTracer
+    
+    // Calculate tile dimensions
+    const auto numTilesX = (IMAGE_WIDTH + TILE_SIZE - 1) / TILE_SIZE;
+    const auto numTilesY = (IMAGE_HEIGHT + TILE_SIZE - 1) / TILE_SIZE;
+    const auto totalTiles = numTilesX * numTilesY;
+    
+    // Parallel tile rendering using TBB
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, totalTiles), 
+        [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t i = range.begin(); i < range.end(); i++) {
+                renderWavefrontTileTask((int)i, image, IMAGE_WIDTH, IMAGE_HEIGHT,
+                                       camera, scene, *this, path_tracer, numTilesX, numTilesY,
+                                       accumulation_buffer, accumulated_samples);
+            }
+        });
+}
+
+void GLRenderer::renderWavefrontTileTask(int tileIndex, std::vector<unsigned char>& image,
+                                         int width, int height, const Camera& camera, RTCScene scene,
+                                         const GLRenderer& renderer, PathTracer& path_tracer, int numTilesX, int numTilesY,
+                                         std::vector<glm::vec3>& accumulation_buffer, int accumulated_samples) {
+    constexpr int TILE_SIZE = 32;
+    
+    // Calculate tile coordinates
+    const auto tileX = tileIndex % numTilesX;
+    const auto tileY = tileIndex / numTilesX;
+    
+    const auto x0 = tileX * TILE_SIZE;
+    const auto y0 = tileY * TILE_SIZE;
+    const auto x1 = std::min(x0 + TILE_SIZE, width);
+    const auto y1 = std::min(y0 + TILE_SIZE, height);
+    
+    // Setup wavefront context once per tile
     wf::WFContext ctx;
     ctx.scene = scene;
     ctx.materials = &path_tracer.getMaterialManager();
     ctx.lights = &path_tracer.getLightManager();
     ctx.env = &path_tracer.getEnvironmentManager();
     
-    // Use PathTracer's helper for consistency
-    ctx.cb.safe_origin = [&path_tracer](const glm::vec3& p, const glm::vec3& n, bool front) -> glm::vec3 {
-        return path_tracer.calculateSafeRayOrigin(p, n, front);
-    };
+    // Note: We can't use lambda with PathTracer reference in parallel context safely,
+    // so we'll use the default implementation from wf_math.h
     
     // Setup parameters
     wf::WFParams wp;
-    wp.spp = 1;  // Single sample per frame; accumulation happens across frames
+    wp.spp = 1;
     wp.max_depth = path_tracer.getSettings().max_depth;
     
-    // Render each pixel
-    for (uint32_t y = 0; y < IMAGE_HEIGHT; ++y) {
-        for (uint32_t x = 0; x < IMAGE_WIDTH; ++x) {
-            uint32_t pixel_seed = uint32_t(y * IMAGE_WIDTH + x);
+    // Render pixels in this tile
+    for (int y = y0; y < y1; y++) {
+        for (int x = x0; x < x1; x++) {
+            uint32_t pixel_seed = uint32_t(y * width + x);
             
             // Generate one sample with subpixel jitter per frame
-            // Generate per-frame RNG
             uint32_t rng = wf::wang_hash(pixel_seed ^ accumulated_samples * 9781u);
             
             // Subpixel jitter
@@ -323,22 +353,22 @@ void GLRenderer::renderWavefront(std::vector<unsigned char>& image, const Camera
             float jy = wf::default_rand01(rng);
             
             // Generate jittered primary ray
-            float u = (float(x) + jx) / float(IMAGE_WIDTH);
-            float v = (float(y) + jy) / float(IMAGE_HEIGHT);
+            float u = (float(x) + jx) / float(width);
+            float v = (float(y) + jy) / float(height);
             glm::vec3 ray_dir = camera.getRayDirection(u, v);
             glm::vec3 origin = camera.getPosition();
             
             // Trace ray
-            glm::vec3 sample_color = m_wf_path_tracer->traceRay(
+            glm::vec3 sample_color = renderer.m_wf_path_tracer->traceRay(
                 ctx,
                 wp,
                 origin,
                 ray_dir,
-                pixel_seed ^ accumulated_samples  // unique seed per frame
+                pixel_seed ^ accumulated_samples
             );
             
             // Accumulate the sample
-            int pixel_index = y * IMAGE_WIDTH + x;
+            int pixel_index = y * width + x;
             if (pixel_index >= 0 && pixel_index < accumulation_buffer.size()) {
                 accumulation_buffer[pixel_index] += sample_color;
                 
