@@ -7,6 +7,13 @@
 #include <memory>
 #include <atomic>
 
+struct RTCSceneTy;
+typedef RTCSceneTy* RTCScene;
+
+namespace wf {
+    class WavefrontPathTracerCPU;
+}
+
 // Forward declarations
 class Camera;
 class PathTracer;
@@ -28,6 +35,7 @@ private:
     bool m_camera_moved = true;
     std::atomic<int> m_tiles_completed{0};
     bool m_test_wavefront = false;  // Flag to test wavefront integrator
+    std::unique_ptr<wf::WavefrontPathTracerCPU> m_wf_path_tracer;
     
     // Input state
     bool m_keys[1024] = {false};
@@ -76,6 +84,8 @@ private:
     
     // Rendering
     void renderFrame(const std::vector<unsigned char>& image);
+    void renderWavefront(std::vector<unsigned char>& image, const Camera& camera, 
+                        RTCScene scene, PathTracer& path_tracer);
     void updateTiming();
     void processInput();
     bool hasCameraMoved();

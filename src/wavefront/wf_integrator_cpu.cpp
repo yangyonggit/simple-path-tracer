@@ -1,5 +1,5 @@
-#include "wf_integrator_cpu.h"
-#include "wf_math.h"
+#include "wavefront/wf_integrator_cpu.h"
+#include "wavefront/wf_math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,17 +14,8 @@ static inline wf::float3 to_wf(const glm::vec3& v) { return {v.x, v.y, v.z}; }
 static inline glm::vec3 to_glm(const wf::float3& v) { return {v.x, v.y, v.z}; }
 
 // Simple hash RNG (placeholder; we'll replace with a better per-path RNG later)
-static inline uint32_t wang_hash(uint32_t a) {
-  a = (a ^ 61u) ^ (a >> 16u);
-  a *= 9u;
-  a = a ^ (a >> 4u);
-  a *= 0x27d4eb2du;
-  a = a ^ (a >> 15u);
-  return a;
-}
-
 static inline float rand01(uint32_t& rng) {
-  rng = wang_hash(rng);
+  rng = wf::wang_hash(rng);
   // Use 24 bits
   return float(rng & 0x00FFFFFFu) / float(0x01000000u);
 }

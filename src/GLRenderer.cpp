@@ -2,6 +2,8 @@
 #include "Camera.h"
 #include "PathTracer.h"
 #include "wavefront/wf_integrator_cpu.h"
+#include "wavefront/wf_pt_cpu.h"
+#include "wavefront/wf_math.h"
 #include "EmbreeScene.h"
 #include <iostream>
 #include <algorithm>
@@ -12,6 +14,8 @@ GLRenderer* GLRenderer::s_instance = nullptr;
 GLRenderer::GLRenderer() {
     // Initialize accumulation buffer
     m_accumulation_buffer.resize(IMAGE_WIDTH * IMAGE_HEIGHT, glm::vec3(0.0f));
+    // Initialize wavefront path tracer
+    m_wf_path_tracer = std::make_unique<wf::WavefrontPathTracerCPU>();
     s_instance = this;
 }
 
@@ -128,22 +132,9 @@ void GLRenderer::renderLoop(EmbreeScene& embree_scene, Camera& camera, PathTrace
         // Increment sample count
         ++m_accumulated_samples;
         
-        // Test wavefront integrator if enabled
+        // Test wavefront path tracer if enabled
         if (m_test_wavefront) {
-            static wf::WavefrontIntegratorCPU wf_integrator;
-            wf::RenderParams params;
-            params.width = IMAGE_WIDTH;
-            params.height = IMAGE_HEIGHT;
-            params.spp = 1;
-            params.max_bounce = 5;
-            
-            std::vector<float> out_rgb;
-            wf_integrator.render(params, out_rgb);
-            
-            // Convert float RGB to unsigned char for display
-            for (size_t i = 0; i < out_rgb.size() && i < image.size(); ++i) {
-                image[i] = static_cast<unsigned char>(std::clamp(out_rgb[i] * 255.0f, 0.0f, 255.0f));
-            }
+            renderWavefront(image, camera, embree_scene.getScene(), path_tracer);
         } else {
             // Render image using PathTracer's parallel processing
             path_tracer.renderImage(image, IMAGE_WIDTH, IMAGE_HEIGHT, camera, embree_scene.getScene(),
@@ -293,4 +284,76 @@ void GLRenderer::errorCallback(int error, const char* description) {
 
 void GLRenderer::framebufferSizeCallback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
+}
+
+void GLRenderer::renderWavefront(std::vector<unsigned char>& image, const Camera& camera,
+                                 RTCScene scene, PathTracer& path_tracer) {
+    // Setup wavefront context
+    wf::WFContext ctx;
+    ctx.scene = scene;
+    ctx.materials = &path_tracer.getMaterialManager();
+    ctx.lights = &path_tracer.getLightManager();
+    ctx.env = &path_tracer.getEnvironmentManager();
+    
+    // Use PathTracer's helper for consistency
+    ctx.cb.safe_origin = [&path_tracer](const glm::vec3& p, const glm::vec3& n, bool front) -> glm::vec3 {
+        return path_tracer.calculateSafeRayOrigin(p, n, front);
+    };
+    
+    // Setup parameters
+    wf::WFParams wp;
+    wp.spp = path_tracer.getSettings().samples_per_pixel;
+    wp.max_depth = path_tracer.getSettings().max_depth;
+    
+    // Render each pixel
+    for (uint32_t y = 0; y < IMAGE_HEIGHT; ++y) {
+        for (uint32_t x = 0; x < IMAGE_WIDTH; ++x) {
+            glm::vec3 accumulated_color(0.0f);
+            uint32_t pixel_seed = uint32_t(y * IMAGE_WIDTH + x);
+            
+            // Multiple samples per pixel with subpixel jitter
+            for (uint32_t s = 0; s < wp.spp; ++s) {
+                // Generate per-sample RNG from pixel seed
+                uint32_t rng = wf::wang_hash(pixel_seed ^ (s * 9781u + 1u));
+                
+                // Subpixel jitter
+                float jx = wf::default_rand01(rng);
+                float jy = wf::default_rand01(rng);
+                
+                // Generate jittered primary ray
+                float u = (float(x) + jx) / float(IMAGE_WIDTH);
+                float v = (float(y) + jy) / float(IMAGE_HEIGHT);
+                glm::vec3 ray_dir = camera.getRayDirection(u, v);
+                glm::vec3 origin = camera.getPosition();
+                
+                // Trace ray with single sample (spp=1 internally, aggregation done here)
+                wf::WFParams wp_single;
+                wp_single.spp = 1;
+                wp_single.max_depth = wp.max_depth;
+                
+                glm::vec3 sample_color = m_wf_path_tracer->traceRay(
+                    ctx,
+                    wp_single,
+                    origin,
+                    ray_dir,
+                    pixel_seed + s  // unique seed per sample
+                );
+                
+                accumulated_color += sample_color;
+            }
+            
+            // Average the samples
+            glm::vec3 color = accumulated_color / float(wp.spp);
+            
+            // Tone mapping & gamma correction (consistent with PathTracer)
+            color = path_tracer.getEnvironmentManager().acesToneMapping(color);
+            color = glm::pow(color, glm::vec3(1.0f / 2.2f));
+            
+            // Write to image buffer
+            const size_t idx = (y * IMAGE_WIDTH + x) * 3;
+            image[idx + 0] = static_cast<unsigned char>(std::clamp(color.r * 255.0f, 0.0f, 255.0f));
+            image[idx + 1] = static_cast<unsigned char>(std::clamp(color.g * 255.0f, 0.0f, 255.0f));
+            image[idx + 2] = static_cast<unsigned char>(std::clamp(color.b * 255.0f, 0.0f, 255.0f));
+        }
+    }
 }

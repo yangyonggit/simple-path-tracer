@@ -42,8 +42,6 @@ private:
     // Core ray intersection and tracing helpers
     bool intersectRay(RTCScene scene, const glm::vec3& origin, const glm::vec3& direction,
                      RTCRayHit& rayhit) const;
-    glm::vec3 calculateSafeRayOrigin(const glm::vec3& hit_point, const glm::vec3& normal, 
-                                    bool offset_forward = true) const;
     
     // Core tracing functions
     glm::vec3 tracePathMonteCarlo(RTCScene scene, const glm::vec3& origin, 
@@ -96,6 +94,10 @@ public:
     
     // Utility functions
     static void initializeRandomSeed();
+    
+    // Helper for safe ray origin calculation
+    glm::vec3 calculateSafeRayOrigin(const glm::vec3& hit_point, const glm::vec3& normal, 
+                                    bool offset_forward = true) const;
     
     // Helper functions for transparency and refraction
     float schlickFresnel(float cosine, float ior) const;
