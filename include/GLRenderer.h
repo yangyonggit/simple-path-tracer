@@ -19,7 +19,14 @@ namespace wf {
 // Forward declarations
 class Camera;
 class PathTracer;
-class EmbreeScene;
+
+namespace backends {
+    class EmbreeBackend;
+}
+
+namespace scene {
+    struct SceneDesc;
+}
 
 class GLRenderer {
 public:
@@ -69,7 +76,8 @@ public:
     void cleanup();
     
     // Main rendering loop
-    void renderLoop(EmbreeScene& embree_scene, Camera& camera, PathTracer& path_tracer);
+    void renderLoop(backends::EmbreeBackend& backend, const scene::SceneDesc& sceneDesc,
+                   Camera& camera, PathTracer& path_tracer);
     
     // Camera management
     void setCamera(Camera* camera) { m_camera = camera; }

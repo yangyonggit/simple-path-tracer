@@ -2,7 +2,6 @@
 #include "Camera.h"
 #include "Light.h"
 #include "Material.h"
-#include "EmbreeScene.h"
 #include <cmath>
 #include <algorithm>
 #include <limits>

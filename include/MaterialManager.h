@@ -8,6 +8,7 @@
 class MaterialManager {
 private:
     std::vector<Material> m_materials;
+    std::vector<uint32_t> m_geom_material_id;  // geomID -> materialId mapping
 
 public:
     MaterialManager();
@@ -26,6 +27,11 @@ public:
     void setMaterial(int index, Material&& material);
     const Material& getMaterial(int index) const;
     size_t getMaterialCount() const { return m_materials.size(); }
+    
+    // Geometry to material ID mapping
+    void setGeomMaterialMapping(const std::vector<uint32_t>& geomMaterialId) {
+        m_geom_material_id = geomMaterialId;
+    }
     
     // Material lookup by geometry ID
     const Material& getMaterialByID(int geomID) const;

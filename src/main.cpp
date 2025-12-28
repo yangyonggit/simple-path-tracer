@@ -3,9 +3,10 @@
 #include <fstream>
 #include <tbb/global_control.h>
 #include "Camera.h"
-#include "EmbreeScene.h"
 #include "PathTracer.h"
 #include "GLRenderer.h"
+#include "scene/SceneBuilder.h"
+#include "backends/EmbreeBackend.h"
 
 // Command line options structure
 struct CommandLineOptions {
@@ -131,39 +132,31 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "\n";
 
-    // Create scene based on command line options
-    EmbreeScene embree_scene(options.use_custom_scene ? false : true);
+    // Build scene from SceneDesc
+    std::cout << "Building scene from SceneDesc..." << std::endl;
+    scene::SceneDesc sceneDesc = scene::BuildDefaultScene();
     
-    // If using custom scene, load the GLTF file instead of default scene
+    std::cout << "Scene loaded:"
+              << "\n  Materials: " << sceneDesc.materials.size()
+              << "\n  Meshes: " << sceneDesc.meshes.size()
+              << "\n  Instances: " << sceneDesc.instances.size()
+              << "\n  Total triangles: " << sceneDesc.totalTriangles() << std::endl;
+    
+    // TODO: Future support for custom GLTF files via SceneDesc
     if (options.use_custom_scene) {
-        std::cout << "Loading custom GLTF model: " << options.gltf_filename << std::endl;
-        
-        // Check if file exists
-        std::ifstream file_check(options.gltf_filename);
-        if (!file_check.good()) {
-            std::cerr << "Error: GLTF file does not exist: " << options.gltf_filename << std::endl;
-            std::cerr << "Falling back to default scene" << std::endl;
-        } else {
-            file_check.close();
-            // Load the custom GLTF file with material ID 0 (default material)
-            std::cout << "File exists, attempting to load..." << std::endl;
-            if (!embree_scene.loadGLTF(options.gltf_filename, glm::vec3(0.0f, 0.0f, 0.0f), 1.0f, 0)) {
-                std::cerr << "Failed to load GLTF model: " << options.gltf_filename << std::endl;
-                std::cerr << "Falling back to default scene" << std::endl;
-                // Continue with default scene if custom loading fails
-            } else {
-                std::cout << "Successfully loaded custom GLTF model" << std::endl;
-                std::cout << "Note: Using custom scene - default spheres will not be loaded" << std::endl;
-            }
-        }
-    } else {
-        std::cout << "Using default scene with multiple spheres and test objects" << std::endl;
+        std::cout << "Note: Custom GLTF loading via SceneDesc not yet implemented." << std::endl;
+        std::cout << "Using default scene instead." << std::endl;
     }
     
-    if (!embree_scene.isValid()) {
-        std::cerr << "Failed to create Embree scene!" << std::endl;
+    // Convert SceneDesc to RTCScene using EmbreeBackend
+    std::cout << "Converting SceneDesc to Embree scene..." << std::endl;
+    backends::EmbreeBackend embreeBackend;
+    if (!embreeBackend.build(sceneDesc)) {
+        std::cerr << "Failed to build Embree scene from SceneDesc!" << std::endl;
         return -1;
     }
+    
+    std::cout << "Embree scene built successfully." << std::endl;
 
     std::cout << "Scene created. Initializing renderer..." << std::endl;
     
@@ -205,25 +198,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Accumulation: Progressive sampling when camera is stationary" << std::endl;
     
     // Display loaded content info
-    if (options.use_custom_scene) {
-        std::cout << "Scene: Custom GLTF model (" << options.gltf_filename << ")" << std::endl;
-    } else {
-        std::cout << "Scene: Default test scene with spheres and objects" << std::endl;
-    }
-    
-    if (!options.skybox_filename.empty()) {
-        std::cout << "Environment: Custom HDR skybox (" << options.skybox_filename << ")" << std::endl;
-    } else {
-        std::cout << "Environment: Default HDR environment" << std::endl;
-    }
-    std::cout << std::endl;
-    
-    // Display loaded content info
-    if (options.use_custom_scene) {
-        std::cout << "Scene: Custom GLTF model (" << options.gltf_filename << ")" << std::endl;
-    } else {
-        std::cout << "Scene: Default test scene with spheres and objects" << std::endl;
-    }
+    std::cout << "Scene: Default test scene with triangulated primitives" << std::endl;
     
     if (!options.skybox_filename.empty()) {
         std::cout << "Environment: Custom HDR skybox (" << options.skybox_filename << ")" << std::endl;
@@ -233,7 +208,7 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
 
     // Start the main rendering loop
-    renderer.renderLoop(embree_scene, camera, path_tracer);
+    renderer.renderLoop(embreeBackend, sceneDesc, camera, path_tracer);
 
     std::cout << "Path tracer completed successfully!" << std::endl;
     return 0;

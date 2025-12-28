@@ -1,10 +1,12 @@
 #include "GLRenderer.h"
 #include "Camera.h"
 #include "PathTracer.h"
+#include "MaterialManager.h"
 #include "wavefront/wf_integrator_cpu.h"
 #include "wavefront/wf_pt_cpu.h"
 #include "wavefront/wf_math.h"
-#include "EmbreeScene.h"
+#include "backends/EmbreeBackend.h"
+#include "scene/SceneDesc.h"
 #include <iostream>
 #include <algorithm>
 
@@ -105,8 +107,20 @@ void GLRenderer::setupCallbacks() {
     glfwSetMouseButtonCallback(m_window, mouseButtonCallback);
 }
 
-void GLRenderer::renderLoop(EmbreeScene& embree_scene, Camera& camera, PathTracer& path_tracer) {
+void GLRenderer::renderLoop(backends::EmbreeBackend& backend, const scene::SceneDesc& sceneDesc,
+                           Camera& camera, PathTracer& path_tracer) {
     setCamera(&camera);
+    
+    // Get RTCScene from backend
+    RTCScene rtcScene = backend.getScene();
+    if (!rtcScene) {
+        std::cerr << "Invalid RTCScene from EmbreeBackend\n";
+        return;
+    }
+    
+    // Pass geometry to material ID mapping from EmbreeBackend to MaterialManager
+    MaterialManager& material_manager = path_tracer.getMaterialManager();
+    material_manager.setGeomMaterialMapping(backend.getGeomMaterialMapping());
     
     // Allocate image buffer (RGB format)
     std::vector<unsigned char> image(IMAGE_WIDTH * IMAGE_HEIGHT * 3);
@@ -134,11 +148,11 @@ void GLRenderer::renderLoop(EmbreeScene& embree_scene, Camera& camera, PathTrace
         
         // Test wavefront path tracer if enabled
         if (m_test_wavefront) {
-            renderWavefront(image, camera, embree_scene.getScene(), path_tracer,
+            renderWavefront(image, camera, rtcScene, path_tracer,
                            m_accumulation_buffer, m_accumulated_samples);
         } else {
             // Render image using PathTracer's parallel processing
-            path_tracer.renderImage(image, IMAGE_WIDTH, IMAGE_HEIGHT, camera, embree_scene.getScene(),
+            path_tracer.renderImage(image, IMAGE_WIDTH, IMAGE_HEIGHT, camera, rtcScene,
                                    m_accumulation_buffer, m_accumulated_samples,
                                    m_camera_moved, m_tiles_completed);
         }

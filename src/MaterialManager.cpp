@@ -77,18 +77,12 @@ const Material& MaterialManager::getMaterialByID(int geomID) const {
 }
 
 const Material& MaterialManager::getMaterialFromHit(RTCScene scene, const RTCRayHit& rayhit) const {
-    // Try to get material from geometry user data first
-    RTCGeometry geometry = rtcGetGeometry(scene, rayhit.hit.geomID);
-    if (geometry) {
-        void* userData = rtcGetGeometryUserData(geometry);
-        if (userData) {
-            // For spheres, userData points to SphereData which contains materialID
-            // For meshes, userData contains the material ID as uintptr_t
-            // This is a simplified approach - in a real system you'd have a more robust method
-            uintptr_t materialID = reinterpret_cast<uintptr_t>(userData);
-            if (materialID < m_materials.size()) {
-                return m_materials[materialID];
-            }
+    // Use the pre-built geometry to material ID mapping from EmbreeBackend
+    int geomID = rayhit.hit.geomID;
+    if (!m_geom_material_id.empty() && geomID >= 0 && geomID < static_cast<int>(m_geom_material_id.size())) {
+        uint32_t materialID = m_geom_material_id[geomID];
+        if (materialID < m_materials.size()) {
+            return m_materials[materialID];
         }
     }
     
