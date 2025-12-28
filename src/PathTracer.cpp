@@ -175,24 +175,36 @@ glm::vec3 PathTracer::tracePathMonteCarlo(RTCScene scene, const glm::vec3& origi
         color += material.albedo * indirect_light * material.metallic;
     } 
     else if (material.isTransparent()) {
-        // Glass/transparent material
+        // Glass/transparent material - Fresnel-based probabilistic reflection/refraction
         float ior = material.ior;
         float cosine = -glm::dot(direction, normal);
         float eta = cosine > 0.0f ? (1.0f / ior) : ior;
         float transparency = material.getTransparency();
         
-        glm::vec3 refracted = refract(direction, normal, eta);
-        if (glm::length(refracted) > 0.0f && !shouldTransmit(material, cosine)) {
-            // Refraction
-            glm::vec3 refract_origin = calculateSafeRayOrigin(hit_point, normal, false);
-            glm::vec3 transmission_light = tracePathMonteCarlo(scene, refract_origin, refracted, depth - 1);
-            color += transmission_light * transparency;
-        } else {
-            // Total internal reflection
+        // Fresnel-Schlick for probabilistic reflection/refraction decision
+        float fresnel = schlickFresnel(std::abs(cosine), ior);
+        float xi = randomFloat();
+        
+        if (xi < fresnel) {
+            // Reflection
             glm::vec3 reflect_dir = glm::reflect(direction, normal);
             glm::vec3 reflect_origin = calculateSafeRayOrigin(hit_point, normal, true);
             glm::vec3 reflection_light = tracePathMonteCarlo(scene, reflect_origin, reflect_dir, depth - 1);
-            color += reflection_light;
+            color += reflection_light * (1.0f - transparency);
+        } else {
+            // Refraction
+            glm::vec3 refracted = refract(direction, normal, eta);
+            if (glm::length(refracted) > 0.0f) {
+                glm::vec3 refract_origin = calculateSafeRayOrigin(hit_point, normal, false);
+                glm::vec3 transmission_light = tracePathMonteCarlo(scene, refract_origin, refracted, depth - 1);
+                color += transmission_light * transparency;
+            } else {
+                // Total internal reflection fallback
+                glm::vec3 reflect_dir = glm::reflect(direction, normal);
+                glm::vec3 reflect_origin = calculateSafeRayOrigin(hit_point, normal, true);
+                glm::vec3 reflection_light = tracePathMonteCarlo(scene, reflect_origin, reflect_dir, depth - 1);
+                color += reflection_light;
+            }
         }
     }
     else {

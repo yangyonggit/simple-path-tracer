@@ -167,22 +167,23 @@ inline MeshData createCubeMesh(uint32_t materialId = 0) {
     MeshData mesh;
     mesh.materialId = materialId;
     
-    // 8 vertices of a unit cube
+    // 8 vertices of a unit cube (same as old EmbreeScene::createCube)
+    // Vertex layout: 0-3 bottom face, 4-7 top face
     mesh.positions = {
-        {-0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, -0.5f},
-        {0.5f,  0.5f, -0.5f}, {-0.5f,  0.5f, -0.5f},
-        {-0.5f, -0.5f,  0.5f}, {0.5f, -0.5f,  0.5f},
+        {-0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, -0.5f},  // Bottom face
+        {0.5f, -0.5f,  0.5f}, {-0.5f, -0.5f,  0.5f},
+        {-0.5f,  0.5f, -0.5f}, {0.5f,  0.5f, -0.5f},  // Top face
         {0.5f,  0.5f,  0.5f}, {-0.5f,  0.5f,  0.5f}
     };
     
-    // 12 triangles (6 faces * 2 triangles)
+    // 12 triangles (6 faces * 2 triangles) - same order as old EmbreeScene::createCube
     mesh.indices = {
-        {0, 2, 1}, {0, 3, 2},  // Front
-        {1, 2, 6}, {1, 6, 5},  // Right
-        {5, 6, 7}, {5, 7, 4},  // Back
-        {4, 7, 3}, {4, 3, 0},  // Left
-        {3, 7, 6}, {3, 6, 2},  // Top
-        {4, 0, 1}, {4, 1, 5}   // Bottom
+        {0, 2, 1}, {0, 3, 2},  // Bottom face
+        {4, 5, 6}, {4, 6, 7},  // Top face
+        {0, 1, 5}, {0, 5, 4},  // Front face
+        {2, 3, 7}, {2, 7, 6},  // Back face
+        {3, 0, 4}, {3, 4, 7},  // Left face
+        {1, 2, 6}, {1, 6, 5}   // Right face
     };
     
     return mesh;
