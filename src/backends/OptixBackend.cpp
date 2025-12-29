@@ -17,6 +17,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
+#include "Camera.h"
+
 namespace backends {
 
 namespace {
@@ -951,7 +953,7 @@ void OptixBackend::allocateOutputBuffer(int width, int height) {
 // ========================================
 // Render
 // ========================================
-void OptixBackend::render(unsigned char* pixels, int width, int height) {
+void OptixBackend::render(unsigned char* pixels, int width, int height, const Camera& camera) {
     // Allocate output buffer on device
     allocateOutputBuffer(width, height);
     
@@ -963,20 +965,27 @@ void OptixBackend::render(unsigned char* pixels, int width, int height) {
     launch_params.topHandle = ias_handle_;
     launch_params.debug_mode = debug_mode_;
 
-    // Simple pinhole camera looking down -Z with 60 deg vertical fov
-    const float fov_deg = 60.0f;
-    const float aspect = static_cast<float>(width) / static_cast<float>(height);
-    const float tan_half_fov = tanf(glm::radians(fov_deg * 0.5f));
+    // Camera: match CPU/Embree camera rays.
+    // Device raygen expects: dir = normalize(cam_w + ndc.x*cam_u + ndc.y*cam_v), with ndc in [-1,1] and Y flipped.
+    // We derive cam_u/cam_v scales from Camera::getRayDirection() so we don't depend on Camera internals.
+    const glm::vec3 cam_pos = camera.getPosition();
+    const glm::vec3 forward = glm::normalize(camera.getFront());
+    const glm::vec3 right = glm::normalize(camera.getRight());
+    const glm::vec3 up = glm::normalize(camera.getUp());
 
-    const glm::vec3 forward(0.0f, 0.0f, -1.0f);
-    const glm::vec3 up(0.0f, 1.0f, 0.0f);
-    const glm::vec3 right = glm::normalize(glm::cross(forward, up));
+    const glm::vec3 dir_x = camera.getRayDirection(1.0f, 0.5f);  // ndc.x = +1, ndc.y = 0
+    const float denom_x = glm::dot(dir_x, forward);
+    const float half_width = (denom_x != 0.0f) ? (glm::dot(dir_x, right) / denom_x) : 0.0f;
 
-    const glm::vec3 cam_u = right * (tan_half_fov * aspect);
-    const glm::vec3 cam_v = glm::normalize(glm::cross(cam_u, forward)) * tan_half_fov;
+    const glm::vec3 dir_y = camera.getRayDirection(0.5f, 0.0f);  // ndc.x = 0, ndc.y = +1
+    const float denom_y = glm::dot(dir_y, forward);
+    const float half_height = (denom_y != 0.0f) ? (glm::dot(dir_y, up) / denom_y) : 0.0f;
+
+    const glm::vec3 cam_u = right * half_width;
+    const glm::vec3 cam_v = up * half_height;
     const glm::vec3 cam_w = forward;
 
-    launch_params.cam_pos = make_float3(0.0f, 0.0f, 0.0f);
+    launch_params.cam_pos = make_float3(cam_pos.x, cam_pos.y, cam_pos.z);
     launch_params.cam_u   = make_float3(cam_u.x, cam_u.y, cam_u.z);
     launch_params.cam_v   = make_float3(cam_v.x, cam_v.y, cam_v.z);
     launch_params.cam_w   = make_float3(cam_w.x, cam_w.y, cam_w.z);

@@ -135,8 +135,8 @@ int main(int argc, char* argv[]) {
     std::cout << "\n";
 
     // Build scene from SceneDesc
-    std::cout << "Building test triangle scene from SceneDesc..." << std::endl;
-    scene::SceneDesc sceneDesc = scene::BuildTestTriangleScene();
+    std::cout << "Building default scene from SceneDesc..." << std::endl;
+    scene::SceneDesc sceneDesc = scene::BuildDefaultScene();
     
     std::cout << "Scene loaded:"
               << "\n  Materials: " << sceneDesc.materials.size()

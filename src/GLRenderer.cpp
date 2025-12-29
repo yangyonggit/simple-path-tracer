@@ -154,7 +154,7 @@ void GLRenderer::renderLoop(backends::EmbreeBackend& backend, backends::OptixBac
         // Choose rendering backend
         if (m_use_gpu_rendering) {
             // Use OptiX GPU rendering
-            m_optix_backend->render(image.data(), IMAGE_WIDTH, IMAGE_HEIGHT);
+            m_optix_backend->render(image.data(), IMAGE_WIDTH, IMAGE_HEIGHT, camera);
         } else if (m_test_wavefront) {
             // Test wavefront path tracer (CPU)
             renderWavefront(image, camera, rtcScene, path_tracer,

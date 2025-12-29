@@ -26,6 +26,8 @@ namespace scene {
     struct SceneDesc;
 }
 
+class Camera;
+
 namespace backends {
 
 // ========================================
@@ -43,7 +45,7 @@ public:
     // Render image using OptiX ray tracing
     // pixels: output buffer (width * height * 3 RGB bytes)
     // width, height: image dimensions
-    void render(unsigned char* pixels, int width, int height);
+    void render(unsigned char* pixels, int width, int height, const Camera& camera);
     
     // Release all OptiX resources
     void destroy();
