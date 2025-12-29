@@ -756,34 +756,29 @@ bool OptixBackend::buildIAS(const scene::SceneDesc& sceneDesc) {
     };
 
     std::vector<OptixInstance> instances;
-    instances.reserve(sceneDesc.instances.size() + 1);
+    instances.reserve(sceneDesc.instances.size());
 
-    uint32_t next_instance_id = 0;
-    for (const auto& inst : sceneDesc.instances) {
-        if (inst.meshId != 0) {
-            // Minimal debug-first implementation: only meshId==0 is supported.
-            std::cout << "[OptixBackend] NOTE: Skipping instance with meshId=" << inst.meshId << " (only meshId==0 supported for now)" << std::endl;
-            continue;
-        }
+    for (uint32_t i = 0; i < static_cast<uint32_t>(sceneDesc.instances.size()); ++i) {
+        const auto& inst = sceneDesc.instances[i];
 
         OptixInstance oi = {};
         glmMat4ToOptixTransformRowMajor3x4(inst.worldFromObject, oi.transform);
-        oi.instanceId = next_instance_id++;
-        oi.sbtOffset = 0;  // triangles hitgroup record
+        oi.instanceId = i;         // fill for easier debug
+        oi.sbtOffset = 0;          // triangles hitgroup record
         oi.visibilityMask = 0xFF;
         oi.flags = OPTIX_INSTANCE_FLAG_NONE;
-        oi.traversableHandle = gas_handle_;
+        oi.traversableHandle = gas_handle_;  // single mesh GAS for now
         instances.push_back(oi);
     }
 
-    const bool has_sphere = (gas_sphere_handle_ != 0);
-    if (has_sphere) {
+    // Optional: one sphere instance referencing a single GAS that contains N sphere primitives.
+    // Sphere positions are stored in the sphere center buffer, so we keep identity instance transform.
+    if (!sceneDesc.spheres.empty() && gas_sphere_handle_ != 0) {
         OptixInstance oi = {};
-        // Identity transform
-        oi.transform[0] = 1.0f; oi.transform[1] = 0.0f; oi.transform[2] = 0.0f; oi.transform[3] = 0.0f;
-        oi.transform[4] = 0.0f; oi.transform[5] = 1.0f; oi.transform[6] = 0.0f; oi.transform[7] = 0.0f;
-        oi.transform[8] = 0.0f; oi.transform[9] = 0.0f; oi.transform[10] = 1.0f; oi.transform[11] = 0.0f;
-        oi.instanceId = next_instance_id++;
+        oi.transform[0] = 1.0f;  oi.transform[1] = 0.0f;  oi.transform[2] = 0.0f;  oi.transform[3] = 0.0f;
+        oi.transform[4] = 0.0f;  oi.transform[5] = 1.0f;  oi.transform[6] = 0.0f;  oi.transform[7] = 0.0f;
+        oi.transform[8] = 0.0f;  oi.transform[9] = 0.0f;  oi.transform[10] = 1.0f; oi.transform[11] = 0.0f;
+        oi.instanceId = static_cast<uint32_t>(instances.size());
         oi.sbtOffset = 1;  // sphere hitgroup record
         oi.visibilityMask = 0xFF;
         oi.flags = OPTIX_INSTANCE_FLAG_NONE;
@@ -792,7 +787,7 @@ bool OptixBackend::buildIAS(const scene::SceneDesc& sceneDesc) {
     }
 
     if (instances.empty()) {
-        std::cerr << "[OptixBackend] ERROR: No instances to build IAS (SceneDesc.instances produced none; sphere=" << (has_sphere ? "yes" : "no") << ")" << std::endl;
+        std::cerr << "[OptixBackend] ERROR: No instances to build IAS (no triangle instances and no sphere instance)." << std::endl;
         return false;
     }
 
@@ -899,13 +894,13 @@ bool OptixBackend::build(const scene::SceneDesc& sceneDesc) {
         return false;
     }
 
-    // Build minimal sphere GAS from SceneDesc
+    // Build sphere GAS (optional): one GAS containing N sphere primitives
     if (!buildSphereGAS(sceneDesc)) {
         std::cerr << "[OptixBackend] WARNING: Sphere GAS build failed; continuing with triangle-only IAS." << std::endl;
         gas_sphere_handle_ = 0;
     }
 
-    // Build IAS combining triangle + optional sphere
+    // Build IAS from SceneDesc.instances (+ optional sphere instance)
     if (!buildIAS(sceneDesc)) {
         return false;
     }
