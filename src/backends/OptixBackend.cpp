@@ -13,8 +13,26 @@
 #include <fstream>
 #include <vector>
 #include <cstring>
+#include <cmath>
+#include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 
 namespace backends {
+
+namespace {
+OptixPipelineCompileOptions makePipelineCompileOptions() {
+    OptixPipelineCompileOptions opts = {};
+    opts.usesMotionBlur = false;
+    opts.traversableGraphFlags =
+        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS |
+        OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
+    opts.numPayloadValues = 2;
+    opts.numAttributeValues = 2;
+    opts.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+    opts.pipelineLaunchParamsVariableName = "params";
+    return opts;
+}
+} // namespace
 
 // ========================================
 // SBT Record Types
@@ -154,14 +172,8 @@ bool OptixBackend::createModule() {
     module_compile_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
     
-    // Pipeline compile options
-    OptixPipelineCompileOptions pipeline_compile_options = {};
-    pipeline_compile_options.usesMotionBlur = false;
-    pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
-    pipeline_compile_options.numPayloadValues = 3;  // For future ray payload
-    pipeline_compile_options.numAttributeValues = 2;  // For future hit attributes
-    pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-    pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
+    // Pipeline compile options (shared with pipeline creation)
+    OptixPipelineCompileOptions pipeline_compile_options = makePipelineCompileOptions();
     
     // Create module
     char log[2048];
@@ -278,13 +290,7 @@ bool OptixBackend::createProgramGroups() {
 // ========================================
 bool OptixBackend::createPipeline() {
         // Pipeline compile options (must match those used in createModule)
-        OptixPipelineCompileOptions pipeline_compile_options = {};
-        pipeline_compile_options.usesMotionBlur = false;
-        pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
-        pipeline_compile_options.numPayloadValues = 3;
-        pipeline_compile_options.numAttributeValues = 2;
-        pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-        pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
+        OptixPipelineCompileOptions pipeline_compile_options = makePipelineCompileOptions();
     
     OptixProgramGroup program_groups[] = {
         raygen_prog_group_,
@@ -414,6 +420,82 @@ bool OptixBackend::createSBT() {
 }
 
 // ========================================
+// Build minimal triangle GAS
+// ========================================
+bool OptixBackend::buildTriangleGAS() {
+    // Hardcoded single triangle
+    float3 vertices[3] = {
+        make_float3(-1.0f, 0.0f, -3.0f),
+        make_float3( 1.0f, 0.0f, -3.0f),
+        make_float3( 0.0f, 1.0f, -3.0f)
+    };
+    uint3 indices[1] = { make_uint3(0u, 1u, 2u) };
+
+    // Upload buffers
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_vertices_), sizeof(vertices)));
+    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_vertices_), vertices, sizeof(vertices), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_indices_), sizeof(indices)));
+    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_indices_), indices, sizeof(indices), cudaMemcpyHostToDevice));
+
+    OptixBuildInput build_input = {};
+    build_input.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
+    build_input.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
+    build_input.triangleArray.vertexStrideInBytes = sizeof(float3);
+    build_input.triangleArray.numVertices = 3;
+    CUdeviceptr vertex_buffers[] = { d_vertices_ };
+    build_input.triangleArray.vertexBuffers = vertex_buffers;
+
+    build_input.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
+    build_input.triangleArray.indexStrideInBytes = sizeof(uint3);
+    build_input.triangleArray.numIndexTriplets = 1;
+    build_input.triangleArray.indexBuffer = d_indices_;
+
+    uint32_t triangle_input_flags = OPTIX_GEOMETRY_FLAG_NONE;
+    build_input.triangleArray.flags = &triangle_input_flags;
+    build_input.triangleArray.numSbtRecords = 1;
+
+    OptixAccelBuildOptions accel_options = {};
+    accel_options.buildFlags = OPTIX_BUILD_FLAG_NONE;
+    accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
+
+    OptixAccelBufferSizes gas_buffer_sizes;
+    OPTIX_CHECK(optixAccelComputeMemoryUsage(
+        context_,
+        &accel_options,
+        &build_input,
+        1,
+        &gas_buffer_sizes
+    ));
+
+    // Scratch buffer
+    CUdeviceptr d_temp_buffer = 0;
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_temp_buffer), gas_buffer_sizes.tempSizeInBytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_gas_buffer_), gas_buffer_sizes.outputSizeInBytes));
+
+    OPTIX_CHECK(optixAccelBuild(
+        context_,
+        stream_,
+        &accel_options,
+        &build_input,
+        1,
+        d_temp_buffer,
+        gas_buffer_sizes.tempSizeInBytes,
+        d_gas_buffer_,
+        gas_buffer_sizes.outputSizeInBytes,
+        &gas_handle_,
+        nullptr,
+        0
+    ));
+
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_temp_buffer)));
+
+    // Default top-level handle uses this GAS
+    top_handle_ = gas_handle_;
+    std::cout << "[OptixBackend] Built triangle GAS" << std::endl;
+    return true;
+}
+
+// ========================================
 // Build
 // ========================================
 bool OptixBackend::build(const scene::SceneDesc& sceneDesc) {
@@ -436,6 +518,11 @@ bool OptixBackend::build(const scene::SceneDesc& sceneDesc) {
     
     // Create pipeline
     if (!createPipeline()) {
+        return false;
+    }
+
+    // Build minimal triangle GAS
+    if (!buildTriangleGAS()) {
         return false;
     }
     
@@ -482,6 +569,25 @@ void OptixBackend::render(unsigned char* pixels, int width, int height) {
     launch_params.output_buffer = reinterpret_cast<uchar4*>(d_output_buffer_);
     launch_params.image_width = width;
     launch_params.image_height = height;
+    launch_params.topHandle = gas_handle_;
+
+    // Simple pinhole camera looking down -Z with 60 deg vertical fov
+    const float fov_deg = 60.0f;
+    const float aspect = static_cast<float>(width) / static_cast<float>(height);
+    const float tan_half_fov = tanf(glm::radians(fov_deg * 0.5f));
+
+    const glm::vec3 forward(0.0f, 0.0f, -1.0f);
+    const glm::vec3 up(0.0f, 1.0f, 0.0f);
+    const glm::vec3 right = glm::normalize(glm::cross(forward, up));
+
+    const glm::vec3 cam_u = right * (tan_half_fov * aspect);
+    const glm::vec3 cam_v = glm::normalize(glm::cross(cam_u, forward)) * tan_half_fov;
+    const glm::vec3 cam_w = forward;
+
+    launch_params.cam_pos = make_float3(0.0f, 0.0f, 0.0f);
+    launch_params.cam_u   = make_float3(cam_u.x, cam_u.y, cam_u.z);
+    launch_params.cam_v   = make_float3(cam_v.x, cam_v.y, cam_v.z);
+    launch_params.cam_w   = make_float3(cam_w.x, cam_w.y, cam_w.z);
     
     // Allocate launch params on device if not already allocated
     if (d_launch_params_ == 0) {
@@ -528,7 +634,6 @@ void OptixBackend::render(unsigned char* pixels, int width, int height) {
         pixels[i * 3 + 2] = temp_buffer[i].z;  // B
     }
     
-    std::cout << "[OptixBackend] Render completed" << std::endl;
 }
 
 // ========================================
@@ -553,6 +658,20 @@ void OptixBackend::destroy() {
     if (d_output_buffer_ != 0) {
         cudaFree(reinterpret_cast<void*>(d_output_buffer_));
         d_output_buffer_ = 0;
+    }
+
+    // Free geometry buffers
+    if (d_vertices_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_vertices_));
+        d_vertices_ = 0;
+    }
+    if (d_indices_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_indices_));
+        d_indices_ = 0;
+    }
+    if (d_gas_buffer_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_gas_buffer_));
+        d_gas_buffer_ = 0;
     }
     
     // Free launch params

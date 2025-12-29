@@ -120,4 +120,33 @@ SceneDesc BuildDefaultScene() {
     return scene;
 }
 
+// ========================================
+// Build minimal triangle test scene
+// ========================================
+SceneDesc BuildTestTriangleScene() {
+    SceneDesc scene;
+
+    // 1) Single material (bright red)
+    Material red(glm::vec3(1.0f, 0.0f, 0.0f));
+    scene.addMaterial(red);
+
+    // 2) Single triangle mesh
+    MeshData tri;
+    tri.materialId = 0;
+    tri.positions = {
+        glm::vec3(-1.0f, 0.0f, -3.0f),
+        glm::vec3( 1.0f, 0.0f, -3.0f),
+        glm::vec3( 0.0f, 1.0f, -3.0f)
+    };
+    tri.indices = {
+        glm::uvec3(0, 1, 2)
+    };
+    const uint32_t triMeshId = scene.addMesh(tri);
+
+    // 3) Single instance with identity transform
+    scene.addInstance(triMeshId, glm::mat4(1.0f), 0);
+
+    return scene;
+}
+
 } // namespace scene

@@ -11,4 +11,10 @@ namespace scene {
 // This scene mimics the layout from EmbreeScene but uses the backend-agnostic SceneDesc
 SceneDesc BuildDefaultScene();
 
+// ========================================
+// Build a minimal single-triangle test scene
+// ========================================
+// Useful for OptiX/Embree bring-up and debugging
+SceneDesc BuildTestTriangleScene();
+
 } // namespace scene

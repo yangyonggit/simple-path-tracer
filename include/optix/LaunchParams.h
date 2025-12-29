@@ -15,13 +15,15 @@ struct LaunchParams {
     // Image dimensions
     unsigned int image_width;
     unsigned int image_height;
-    
-    // Camera parameters (for future use)
-    // float3 camera_eye;
-    // float3 camera_u, camera_v, camera_w;
-    
-    // Scene data (for future use)
-    // OptixTraversableHandle traversable;
+
+    // Camera (simple pinhole basis)
+    float3 cam_pos;
+    float3 cam_u;
+    float3 cam_v;
+    float3 cam_w;
+
+    // Scene traversable
+    OptixTraversableHandle topHandle;
 };
 
 } // namespace optix

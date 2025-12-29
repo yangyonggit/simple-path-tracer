@@ -19,6 +19,7 @@ typedef OptixProgramGroup_t* OptixProgramGroup;
 
 struct OptixShaderBindingTable;
 struct OptixPipelineCompileOptions;
+typedef unsigned long long OptixTraversableHandle;
 
 namespace scene {
     struct SceneDesc;
@@ -48,6 +49,7 @@ public:
     
     // Get OptiX context (valid after build() succeeds)
     OptixDeviceContext getContext() const { return context_; }
+    void setTopHandle(OptixTraversableHandle handle) { top_handle_ = handle; }
 
 private:
     // OptiX core objects
@@ -73,6 +75,13 @@ private:
     
     // Launch parameters buffer on device
     CUdeviceptr d_launch_params_ = 0;
+
+    // Geometry buffers and handles
+    CUdeviceptr d_vertices_ = 0;
+    CUdeviceptr d_indices_ = 0;
+    CUdeviceptr d_gas_buffer_ = 0;
+    OptixTraversableHandle gas_handle_ = 0;
+    OptixTraversableHandle top_handle_ = 0;
     
     // PTX code
     std::string ptx_code_;
@@ -83,6 +92,7 @@ private:
     bool createProgramGroups();
     bool createPipeline();
     bool createSBT();
+    bool buildTriangleGAS();
     void allocateOutputBuffer(int width, int height);
     
     // Logging callback
