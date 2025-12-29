@@ -24,6 +24,11 @@ struct LaunchParams {
 
     // Scene traversable
     OptixTraversableHandle topHandle;
+
+    // Debug mode
+    // 0 = normal (tri=red, sphere=green)
+    // 1 = hit/miss (hit=white, miss=black)
+    int debug_mode;
 };
 
 } // namespace optix

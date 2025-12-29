@@ -30,6 +30,7 @@ OptixPipelineCompileOptions makePipelineCompileOptions() {
     opts.numAttributeValues = 2;
     opts.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
     opts.pipelineLaunchParamsVariableName = "params";
+    opts.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE | OPTIX_PRIMITIVE_TYPE_FLAGS_SPHERE;
     return opts;
 }
 } // namespace
@@ -45,7 +46,10 @@ struct alignas(OPTIX_SBT_RECORD_ALIGNMENT) SbtRecord {
 
 using RaygenRecord = SbtRecord<int>;    // Empty data for now
 using MissRecord = SbtRecord<int>;      // Empty data for now
-using HitgroupRecord = SbtRecord<int>;  // Empty data for now
+struct HitgroupData {
+    int geomType;  // 0=triangles, 1=spheres
+};
+using HitgroupRecord = SbtRecord<HitgroupData>;
 
 // ========================================
 // Helper Macros
@@ -195,6 +199,23 @@ bool OptixBackend::createModule() {
     }
     
     std::cout << "[OptixBackend] Module created successfully" << std::endl;
+
+    // Built-in intersection module for spheres (required for OPTIX_BUILD_INPUT_TYPE_SPHERES)
+    {
+        OptixBuiltinISOptions builtin_is_options = {};
+        builtin_is_options.usesMotionBlur = false;
+        builtin_is_options.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_SPHERE;
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixBuiltinISModuleGet(
+            context_,
+            &module_compile_options,
+            &pipeline_compile_options,
+            &builtin_is_options,
+            &sphere_is_module_
+        ));
+    }
+
     return true;
 }
 
@@ -253,7 +274,7 @@ bool OptixBackend::createProgramGroups() {
         }
     }
     
-    // Hitgroup program group (closest hit only)
+    // Hitgroup program group for triangles (closest hit only)
     {
         OptixProgramGroupOptions pg_options = {};
         OptixProgramGroupDesc pg_desc = {};
@@ -280,6 +301,34 @@ bool OptixBackend::createProgramGroups() {
             std::cout << "[OptixBackend] Hitgroup program group log:\n" << log << std::endl;
         }
     }
+
+    // Hitgroup program group for spheres (bind built-in sphere IS module)
+    {
+        OptixProgramGroupOptions pg_options = {};
+        OptixProgramGroupDesc pg_desc = {};
+        pg_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+        pg_desc.hitgroup.moduleCH = module_;
+        pg_desc.hitgroup.entryFunctionNameCH = "__closesthit__ch";
+        pg_desc.hitgroup.moduleAH = nullptr;
+        pg_desc.hitgroup.entryFunctionNameAH = nullptr;
+        pg_desc.hitgroup.moduleIS = sphere_is_module_;
+        pg_desc.hitgroup.entryFunctionNameIS = nullptr;
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixProgramGroupCreate(
+            context_,
+            &pg_desc,
+            1,
+            &pg_options,
+            log,
+            &sizeof_log,
+            &hitgroup_sphere_prog_group_
+        ));
+
+        if (sizeof_log > 1) {
+            std::cout << "[OptixBackend] Sphere hitgroup program group log:\n" << log << std::endl;
+        }
+    }
     
     std::cout << "[OptixBackend] Program groups created successfully" << std::endl;
     return true;
@@ -291,12 +340,16 @@ bool OptixBackend::createProgramGroups() {
 bool OptixBackend::createPipeline() {
         // Pipeline compile options (must match those used in createModule)
         OptixPipelineCompileOptions pipeline_compile_options = makePipelineCompileOptions();
-    
-    OptixProgramGroup program_groups[] = {
-        raygen_prog_group_,
-        miss_prog_group_,
-        hitgroup_prog_group_
-    };
+
+    // IMPORTANT: The pipeline must include ALL program groups referenced by the SBT.
+    // We have two hitgroup program groups (triangles + spheres).
+    std::vector<OptixProgramGroup> program_groups;
+    program_groups.push_back(raygen_prog_group_);
+    program_groups.push_back(miss_prog_group_);
+    program_groups.push_back(hitgroup_prog_group_);
+    if (hitgroup_sphere_prog_group_ != nullptr) {
+        program_groups.push_back(hitgroup_sphere_prog_group_);
+    }
     
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth = 1;  // Simple for now
@@ -308,8 +361,8 @@ bool OptixBackend::createPipeline() {
         context_,
         &pipeline_compile_options,
         &pipeline_link_options,
-        program_groups,
-        sizeof(program_groups) / sizeof(program_groups[0]),
+        program_groups.data(),
+        static_cast<unsigned int>(program_groups.size()),
         log,
         &sizeof_log,
         &pipeline_
@@ -390,18 +443,29 @@ bool OptixBackend::createSBT() {
         ));
     }
     
-    // Hitgroup record
+    // Hitgroup records (1=triangle only, 2=triangle+sphere)
+    const uint32_t hitgroup_record_count = (gas_sphere_handle_ != 0) ? 2u : 1u;
     {
         const size_t hitgroup_record_size = sizeof(HitgroupRecord);
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&hitgroup_record_), hitgroup_record_size));
-        
-        HitgroupRecord hg_sbt;
-        OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_prog_group_, &hg_sbt));
-        
+        const size_t total_size = hitgroup_record_size * hitgroup_record_count;
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&hitgroup_record_), total_size));
+
+        std::vector<HitgroupRecord> records(hitgroup_record_count);
+
+        // Record 0: triangles
+        OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_prog_group_, &records[0]));
+        records[0].data.geomType = 0;
+
+        if (hitgroup_record_count == 2u) {
+            // Record 1: spheres
+            OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_sphere_prog_group_, &records[1]));
+            records[1].data.geomType = 1;
+        }
+
         CUDA_CHECK(cudaMemcpy(
             reinterpret_cast<void*>(hitgroup_record_),
-            &hg_sbt,
-            hitgroup_record_size,
+            records.data(),
+            total_size,
             cudaMemcpyHostToDevice
         ));
     }
@@ -413,9 +477,9 @@ bool OptixBackend::createSBT() {
     sbt_->missRecordCount = 1;
     sbt_->hitgroupRecordBase = hitgroup_record_;
     sbt_->hitgroupRecordStrideInBytes = sizeof(HitgroupRecord);
-    sbt_->hitgroupRecordCount = 1;
-    
-    std::cout << "[OptixBackend] SBT created successfully" << std::endl;
+    sbt_->hitgroupRecordCount = hitgroup_record_count;
+
+    std::cout << "[OptixBackend] SBT created successfully (hitgroupRecordCount=" << sbt_->hitgroupRecordCount << ")" << std::endl;
     return true;
 }
 
@@ -442,8 +506,8 @@ bool OptixBackend::buildTriangleGAS() {
     build_input.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
     build_input.triangleArray.vertexStrideInBytes = sizeof(float3);
     build_input.triangleArray.numVertices = 3;
-    CUdeviceptr vertex_buffers[] = { d_vertices_ };
-    build_input.triangleArray.vertexBuffers = vertex_buffers;
+    triangle_vertex_buffers_[0] = d_vertices_;
+    build_input.triangleArray.vertexBuffers = triangle_vertex_buffers_.data();
 
     build_input.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
     build_input.triangleArray.indexStrideInBytes = sizeof(uint3);
@@ -496,6 +560,252 @@ bool OptixBackend::buildTriangleGAS() {
 }
 
 // ========================================
+// Build minimal sphere GAS (OPTIX_BUILD_INPUT_TYPE_SPHERES)
+// ========================================
+bool OptixBackend::buildSphereGAS(const scene::SceneDesc& sceneDesc) {
+    if (sceneDesc.spheres.empty()) {
+        std::cout << "[OptixBackend] No spheres in SceneDesc; skipping sphere GAS." << std::endl;
+        gas_sphere_handle_ = 0;
+        return true;
+    }
+
+    // Minimal: build one sphere array GAS from SceneDesc analytical spheres.
+    std::vector<float3> centers;
+    std::vector<float> radii;
+    centers.reserve(sceneDesc.spheres.size());
+    radii.reserve(sceneDesc.spheres.size());
+    for (const auto& s : sceneDesc.spheres) {
+        centers.push_back(make_float3(s.center.x, s.center.y, s.center.z));
+        radii.push_back(s.radius);
+    }
+
+    std::cout << "[OptixBackend] Building sphere GAS from SceneDesc: count=" << centers.size() << std::endl;
+    std::cout << "  sphere[0].center: (" << centers[0].x << ", " << centers[0].y << ", " << centers[0].z << ")" << std::endl;
+    std::cout << "  sphere[0].radius: " << radii[0] << std::endl;
+
+    auto sync_and_check = [&](const char* where) {
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "[OptixBackend] CUDA error after " << where << ": " << cudaGetErrorString(err) << std::endl;
+            return false;
+        }
+        err = cudaStreamSynchronize(stream_);
+        if (err != cudaSuccess) {
+            std::cerr << "[OptixBackend] CUDA stream sync failed after " << where << ": " << cudaGetErrorString(err) << std::endl;
+            return false;
+        }
+        return true;
+    };
+
+    // Allocate persistent sphere buffers (must outlive traversal)
+    if (d_sphere_centers_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_sphere_centers_)));
+        d_sphere_centers_ = 0;
+    }
+    if (d_sphere_radii_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_sphere_radii_)));
+        d_sphere_radii_ = 0;
+    }
+
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_sphere_centers_), sizeof(float3) * centers.size()));
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*>(d_sphere_centers_),
+        centers.data(),
+        sizeof(float3) * centers.size(),
+        cudaMemcpyHostToDevice
+    ));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_sphere_radii_), sizeof(float) * radii.size()));
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*>(d_sphere_radii_),
+        radii.data(),
+        sizeof(float) * radii.size(),
+        cudaMemcpyHostToDevice
+    ));
+
+    sphere_center_buffers_[0] = d_sphere_centers_;
+    sphere_radius_buffers_[0] = d_sphere_radii_;
+
+    OptixBuildInput build_input = {};
+    build_input.type = OPTIX_BUILD_INPUT_TYPE_SPHERES;
+    build_input.sphereArray.vertexBuffers = sphere_center_buffers_.data();
+    build_input.sphereArray.numVertices = static_cast<unsigned int>(centers.size());
+    build_input.sphereArray.radiusBuffers = sphere_radius_buffers_.data();
+
+    // One build input, one SBT record for this primitive array.
+    // Instance.sbtOffset selects the correct SBT record at traversal time.
+    uint32_t sphere_input_flags[1] = { OPTIX_GEOMETRY_FLAG_NONE };
+    build_input.sphereArray.flags = sphere_input_flags;
+    build_input.sphereArray.numSbtRecords = 1;
+
+    OptixAccelBuildOptions accel_options = {};
+    accel_options.buildFlags = OPTIX_BUILD_FLAG_NONE;
+    accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
+
+    OptixAccelBufferSizes gas_buffer_sizes;
+    OPTIX_CHECK(optixAccelComputeMemoryUsage(
+        context_,
+        &accel_options,
+        &build_input,
+        1,
+        &gas_buffer_sizes
+    ));
+    if (!sync_and_check("optixAccelComputeMemoryUsage(sphere)")) {
+        return false;
+    }
+
+    CUdeviceptr d_temp_buffer = 0;
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_temp_buffer), gas_buffer_sizes.tempSizeInBytes));
+
+    if (d_gas_sphere_buffer_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_gas_sphere_buffer_)));
+        d_gas_sphere_buffer_ = 0;
+    }
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_gas_sphere_buffer_), gas_buffer_sizes.outputSizeInBytes));
+
+    OPTIX_CHECK(optixAccelBuild(
+        context_,
+        stream_,
+        &accel_options,
+        &build_input,
+        1,
+        d_temp_buffer,
+        gas_buffer_sizes.tempSizeInBytes,
+        d_gas_sphere_buffer_,
+        gas_buffer_sizes.outputSizeInBytes,
+        &gas_sphere_handle_,
+        nullptr,
+        0
+    ));
+    if (!sync_and_check("optixAccelBuild(sphere)")) {
+        return false;
+    }
+
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_temp_buffer)));
+    d_temp_buffer = 0;
+
+    std::cout << "[OptixBackend] Built sphere GAS (handle=" << gas_sphere_handle_ << ")" << std::endl;
+    return gas_sphere_handle_ != 0;
+}
+
+// ========================================
+// Build Instance Acceleration Structure (IAS/TLAS)
+// ========================================
+bool OptixBackend::buildIAS() {
+    std::cout << "[OptixBackend] Building IAS..." << std::endl;
+
+    auto sync_and_check = [&](const char* where) {
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            std::cerr << "[OptixBackend] CUDA error after " << where << ": " << cudaGetErrorString(err) << std::endl;
+            return false;
+        }
+        err = cudaStreamSynchronize(stream_);
+        if (err != cudaSuccess) {
+            std::cerr << "[OptixBackend] CUDA stream sync failed after " << where << ": " << cudaGetErrorString(err) << std::endl;
+            return false;
+        }
+        return true;
+    };
+
+    const bool has_sphere = (gas_sphere_handle_ != 0);
+    const uint32_t num_instances = has_sphere ? 2u : 1u;
+
+    OptixInstance instances[2] = {};
+    auto set_identity_transform = [](float m[12]) {
+        m[0] = 1.0f; m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
+        m[4] = 0.0f; m[5] = 1.0f; m[6] = 0.0f; m[7] = 0.0f;
+        m[8] = 0.0f; m[9] = 0.0f; m[10] = 1.0f; m[11] = 0.0f;
+    };
+
+    // Instance 0: triangle GAS, sbtOffset=0
+    set_identity_transform(instances[0].transform);
+    instances[0].instanceId = 0;
+    instances[0].sbtOffset = 0;
+    instances[0].visibilityMask = 0xFF;
+    instances[0].flags = OPTIX_INSTANCE_FLAG_NONE;
+    instances[0].traversableHandle = gas_handle_;
+
+    if (has_sphere) {
+        // Instance 1: sphere GAS, sbtOffset=1
+        set_identity_transform(instances[1].transform);
+        instances[1].instanceId = 1;
+        instances[1].sbtOffset = 1;
+        instances[1].visibilityMask = 0xFF;
+        instances[1].flags = OPTIX_INSTANCE_FLAG_NONE;
+        instances[1].traversableHandle = gas_sphere_handle_;
+    }
+
+    if (d_instances_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_instances_)));
+        d_instances_ = 0;
+    }
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_instances_), sizeof(OptixInstance) * num_instances));
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*>(d_instances_),
+        instances,
+        sizeof(OptixInstance) * num_instances,
+        cudaMemcpyHostToDevice
+    ));
+
+    OptixBuildInput build_input = {};
+    build_input.type = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
+    build_input.instanceArray.instances = d_instances_;
+    build_input.instanceArray.numInstances = num_instances;
+
+    OptixAccelBuildOptions accel_options = {};
+    accel_options.buildFlags = OPTIX_BUILD_FLAG_NONE;
+    accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
+
+    OptixAccelBufferSizes ias_buffer_sizes;
+    OPTIX_CHECK(optixAccelComputeMemoryUsage(
+        context_,
+        &accel_options,
+        &build_input,
+        1,
+        &ias_buffer_sizes
+    ));
+    if (!sync_and_check("optixAccelComputeMemoryUsage(IAS)")) {
+        return false;
+    }
+
+    CUdeviceptr d_temp_buffer = 0;
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_temp_buffer), ias_buffer_sizes.tempSizeInBytes));
+
+    if (d_ias_buffer_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_ias_buffer_)));
+        d_ias_buffer_ = 0;
+    }
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ias_buffer_), ias_buffer_sizes.outputSizeInBytes));
+
+    OPTIX_CHECK(optixAccelBuild(
+        context_,
+        stream_,
+        &accel_options,
+        &build_input,
+        1,
+        d_temp_buffer,
+        ias_buffer_sizes.tempSizeInBytes,
+        d_ias_buffer_,
+        ias_buffer_sizes.outputSizeInBytes,
+        &ias_handle_,
+        nullptr,
+        0
+    ));
+    if (!sync_and_check("optixAccelBuild(IAS)")) {
+        return false;
+    }
+
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_temp_buffer)));
+    d_temp_buffer = 0;
+
+    top_handle_ = ias_handle_;
+    std::cout << "[OptixBackend] Built IAS successfully" << std::endl;
+    std::cout << "[OptixBackend]   numInstances: " << num_instances << std::endl;
+    std::cout << "[OptixBackend]   ias_handle_: " << ias_handle_ << std::endl;
+    return ias_handle_ != 0;
+}
+
+// ========================================
 // Build
 // ========================================
 bool OptixBackend::build(const scene::SceneDesc& sceneDesc) {
@@ -525,9 +835,32 @@ bool OptixBackend::build(const scene::SceneDesc& sceneDesc) {
     if (!buildTriangleGAS()) {
         return false;
     }
-    
-    // Create SBT
+
+    // Build minimal sphere GAS from SceneDesc
+    if (!buildSphereGAS(sceneDesc)) {
+        std::cerr << "[OptixBackend] WARNING: Sphere GAS build failed; continuing with triangle-only IAS." << std::endl;
+        gas_sphere_handle_ = 0;
+    }
+
+    // Build IAS combining triangle + optional sphere
+    if (!buildIAS()) {
+        return false;
+    }
+
+    // Create SBT (1 or 2 hitgroup records)
     if (!createSBT()) {
+        return false;
+    }
+
+    std::cout << "[OptixBackend] === Build Validation ===" << std::endl;
+    std::cout << "[OptixBackend] gas_handle_: " << gas_handle_ << std::endl;
+    std::cout << "[OptixBackend] gas_sphere_handle_: " << gas_sphere_handle_ << std::endl;
+    std::cout << "[OptixBackend] ias_handle_: " << ias_handle_ << std::endl;
+    std::cout << "[OptixBackend] top_handle_: " << top_handle_ << std::endl;
+    std::cout << "[OptixBackend] SBT hitgroupRecordCount: " << sbt_->hitgroupRecordCount << std::endl;
+
+    if (gas_handle_ == 0 || ias_handle_ == 0) {
+        std::cerr << "[OptixBackend] ERROR: Invalid traversable handles after build." << std::endl;
         return false;
     }
     
@@ -569,7 +902,8 @@ void OptixBackend::render(unsigned char* pixels, int width, int height) {
     launch_params.output_buffer = reinterpret_cast<uchar4*>(d_output_buffer_);
     launch_params.image_width = width;
     launch_params.image_height = height;
-    launch_params.topHandle = gas_handle_;
+    launch_params.topHandle = ias_handle_;
+    launch_params.debug_mode = debug_mode_;
 
     // Simple pinhole camera looking down -Z with 60 deg vertical fov
     const float fov_deg = 60.0f;
@@ -673,6 +1007,30 @@ void OptixBackend::destroy() {
         cudaFree(reinterpret_cast<void*>(d_gas_buffer_));
         d_gas_buffer_ = 0;
     }
+
+    // Free sphere buffers
+    if (d_sphere_centers_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_sphere_centers_));
+        d_sphere_centers_ = 0;
+    }
+    if (d_sphere_radii_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_sphere_radii_));
+        d_sphere_radii_ = 0;
+    }
+    if (d_gas_sphere_buffer_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_gas_sphere_buffer_));
+        d_gas_sphere_buffer_ = 0;
+    }
+
+    // Free IAS buffers
+    if (d_instances_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_instances_));
+        d_instances_ = 0;
+    }
+    if (d_ias_buffer_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_ias_buffer_));
+        d_ias_buffer_ = 0;
+    }
     
     // Free launch params
     if (d_launch_params_ != 0) {
@@ -693,6 +1051,10 @@ void OptixBackend::destroy() {
         optixProgramGroupDestroy(hitgroup_prog_group_);
         hitgroup_prog_group_ = nullptr;
     }
+    if (hitgroup_sphere_prog_group_ != nullptr) {
+        optixProgramGroupDestroy(hitgroup_sphere_prog_group_);
+        hitgroup_sphere_prog_group_ = nullptr;
+    }
     
     // Destroy pipeline
     if (pipeline_ != nullptr) {
@@ -704,6 +1066,10 @@ void OptixBackend::destroy() {
     if (module_ != nullptr) {
         optixModuleDestroy(module_);
         module_ = nullptr;
+    }
+    if (sphere_is_module_ != nullptr) {
+        optixModuleDestroy(sphere_is_module_);
+        sphere_is_module_ = nullptr;
     }
     
     // Destroy context

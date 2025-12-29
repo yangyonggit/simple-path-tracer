@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <array>
 #include <cstdint>
 
 // Forward declarations to avoid full header inclusion
@@ -50,6 +51,7 @@ public:
     // Get OptiX context (valid after build() succeeds)
     OptixDeviceContext getContext() const { return context_; }
     void setTopHandle(OptixTraversableHandle handle) { top_handle_ = handle; }
+    void setDebugMode(int mode) { debug_mode_ = mode; }
 
 private:
     // OptiX core objects
@@ -58,10 +60,12 @@ private:
     
     // Pipeline components
     OptixModule module_ = nullptr;
+    OptixModule sphere_is_module_ = nullptr;
     OptixPipeline pipeline_ = nullptr;
     OptixProgramGroup raygen_prog_group_ = nullptr;
     OptixProgramGroup miss_prog_group_ = nullptr;
     OptixProgramGroup hitgroup_prog_group_ = nullptr;
+    OptixProgramGroup hitgroup_sphere_prog_group_ = nullptr;
     
     // Shader Binding Table
     OptixShaderBindingTable* sbt_ = nullptr;
@@ -81,7 +85,26 @@ private:
     CUdeviceptr d_indices_ = 0;
     CUdeviceptr d_gas_buffer_ = 0;
     OptixTraversableHandle gas_handle_ = 0;
+
+    // Persistent pointer arrays for OptiX build inputs (avoid short-lived stack arrays)
+    std::array<CUdeviceptr, 1> triangle_vertex_buffers_{};
+
+    // Sphere geometry (OPTIX_BUILD_INPUT_TYPE_SPHERES)
+    CUdeviceptr d_sphere_centers_ = 0;  // float3[1]
+    CUdeviceptr d_sphere_radii_ = 0;    // float[1]
+    std::array<CUdeviceptr, 1> sphere_center_buffers_{};
+    std::array<CUdeviceptr, 1> sphere_radius_buffers_{};
+    CUdeviceptr d_gas_sphere_buffer_ = 0;
+    OptixTraversableHandle gas_sphere_handle_ = 0;
+
+    // Instance acceleration structure (IAS/TLAS)
+    CUdeviceptr d_instances_ = 0;
+    CUdeviceptr d_ias_buffer_ = 0;
+    OptixTraversableHandle ias_handle_ = 0;
     OptixTraversableHandle top_handle_ = 0;
+
+    // Debug mode for device shading (host-controlled)
+    int debug_mode_ = 0;          // 0=normal, 1=hit/miss
     
     // PTX code
     std::string ptx_code_;
@@ -93,6 +116,8 @@ private:
     bool createPipeline();
     bool createSBT();
     bool buildTriangleGAS();
+    bool buildSphereGAS(const scene::SceneDesc& sceneDesc);
+    bool buildIAS();
     void allocateOutputBuffer(int width, int height);
     
     // Logging callback

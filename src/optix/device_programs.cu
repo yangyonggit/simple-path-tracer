@@ -6,6 +6,13 @@
 using namespace optix;
 
 // ========================================
+// SBT data layout (must match host)
+// ========================================
+struct HitgroupData {
+    int geomType;  // 0=triangles, 1=spheres
+};
+
+// ========================================
 // Launch Parameters (Global in device code)
 // ========================================
 extern "C" {
@@ -15,18 +22,17 @@ extern "C" {
 // ========================================
 // Payload helpers
 // ========================================
-static __forceinline__ __device__ void packColor(const float3& c, unsigned int& p0, unsigned int& p1) {
+static __forceinline__ __device__ unsigned int packRGB8(const float3& c) {
     unsigned char r = static_cast<unsigned char>(fminf(fmaxf(c.x, 0.0f), 1.0f) * 255.0f);
     unsigned char g = static_cast<unsigned char>(fminf(fmaxf(c.y, 0.0f), 1.0f) * 255.0f);
     unsigned char b = static_cast<unsigned char>(fminf(fmaxf(c.z, 0.0f), 1.0f) * 255.0f);
-    p0 = (static_cast<unsigned int>(r) << 16) | (static_cast<unsigned int>(g) << 8) | static_cast<unsigned int>(b);
-    p1 = 0u;
+    return (static_cast<unsigned int>(r) << 16) | (static_cast<unsigned int>(g) << 8) | static_cast<unsigned int>(b);
 }
 
-static __forceinline__ __device__ float3 unpackColor(const unsigned int p0, const unsigned int /*p1*/) {
-    const float r = static_cast<float>((p0 >> 16) & 0xFF) * (1.0f / 255.0f);
-    const float g = static_cast<float>((p0 >> 8) & 0xFF) * (1.0f / 255.0f);
-    const float b = static_cast<float>(p0 & 0xFF) * (1.0f / 255.0f);
+static __forceinline__ __device__ float3 unpackRGB8(const unsigned int packed) {
+    const float r = static_cast<float>((packed >> 16) & 0xFF) * (1.0f / 255.0f);
+    const float g = static_cast<float>((packed >> 8) & 0xFF) * (1.0f / 255.0f);
+    const float b = static_cast<float>(packed & 0xFF) * (1.0f / 255.0f);
     return make_float3(r, g, b);
 }
 
@@ -82,8 +88,15 @@ extern "C" __global__ void __raygen__rg() {
         0,                      // miss SBT index
         p0, p1);
 
-    // Unpack payload and write output
-    const float3 color = unpackColor(p0, p1);
+    // Payload contract:
+    // payload0 = hit flag (0 miss, 1 hit)
+    // payload1 = packed RGB8 color for normal mode
+    float3 color;
+    if (params.debug_mode == 1) {
+        color = (p0 != 0u) ? make_float3(1.0f, 1.0f, 1.0f) : make_float3(0.0f, 0.0f, 0.0f);
+    } else {
+        color = unpackRGB8(p1);
+    }
     const unsigned int linear_idx = y * params.image_width + x;
     params.output_buffer[linear_idx] = make_uchar4(
         static_cast<unsigned char>(color.x * 255.0f),
@@ -96,22 +109,27 @@ extern "C" __global__ void __raygen__rg() {
 // Miss Program
 // ========================================
 extern "C" __global__ void __miss__ms() {
-    // Background: dark gray/blue
-    const float3 bg = make_float3(0.05f, 0.07f, 0.10f);
-    unsigned int p0, p1;
-    packColor(bg, p0, p1);
-    optixSetPayload_0(p0);
-    optixSetPayload_1(p1);
+    // Miss: payload0=0. payload1 unused.
+    optixSetPayload_0(0u);
+    optixSetPayload_1(0u);
 }
 
 // ========================================
 // Closest Hit Program
 // ========================================
 extern "C" __global__ void __closesthit__ch() {
-    // Hit color: solid red
-    const float3 hit = make_float3(1.0f, 0.0f, 0.0f);
-    unsigned int p0, p1;
-    packColor(hit, p0, p1);
-    optixSetPayload_0(p0);
-    optixSetPayload_1(p1);
+    // Hit: payload0=1.
+    // In debug_mode=1 (hit/miss), raygen ignores payload1, so avoid SBT reads for easier isolation.
+    if (params.debug_mode == 1) {
+        optixSetPayload_0(1u);
+        optixSetPayload_1(0u);
+        return;
+    }
+
+    // Normal mode: payload1 carries packed RGB8 based on SBT geomType.
+    const HitgroupData* hg = reinterpret_cast<const HitgroupData*>(optixGetSbtDataPointer());
+    const int geomType = hg ? hg->geomType : 0;
+    const float3 hitColor = (geomType == 1) ? make_float3(0.0f, 1.0f, 0.0f) : make_float3(1.0f, 0.0f, 0.0f);
+    optixSetPayload_0(1u);
+    optixSetPayload_1(packRGB8(hitColor));
 }

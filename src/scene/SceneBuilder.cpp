@@ -146,6 +146,10 @@ SceneDesc BuildTestTriangleScene() {
     // 3) Single instance with identity transform
     scene.addInstance(triMeshId, glm::mat4(1.0f), 0);
 
+    // 4) Single analytical sphere for OptiX sphere GAS validation
+    // NOTE: OptiX backend colors spheres green via SBT geomType, independent of material.
+    scene.addSphere(glm::vec3(0.0f, -0.5f, -3.0f), 0.5f, 0);
+
     return scene;
 }
 
