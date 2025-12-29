@@ -20,6 +20,14 @@
 namespace backends {
 
 namespace {
+inline void glmMat4ToOptixTransformRowMajor3x4(const glm::mat4& m, float out[12]) {
+    // GLM is column-major: m[col][row]
+    // OptixInstance expects row-major 3x4: rows 0..2, cols 0..3
+    out[0]  = m[0][0]; out[1]  = m[1][0]; out[2]  = m[2][0]; out[3]  = m[3][0];
+    out[4]  = m[0][1]; out[5]  = m[1][1]; out[6]  = m[2][1]; out[7]  = m[3][1];
+    out[8]  = m[0][2]; out[9]  = m[1][2]; out[10] = m[2][2]; out[11] = m[3][2];
+}
+
 OptixPipelineCompileOptions makePipelineCompileOptions() {
     OptixPipelineCompileOptions opts = {};
     opts.usesMotionBlur = false;
@@ -486,32 +494,62 @@ bool OptixBackend::createSBT() {
 // ========================================
 // Build minimal triangle GAS
 // ========================================
-bool OptixBackend::buildTriangleGAS() {
-    // Hardcoded single triangle
-    float3 vertices[3] = {
-        make_float3(-1.0f, 0.0f, -3.0f),
-        make_float3( 1.0f, 0.0f, -3.0f),
-        make_float3( 0.0f, 1.0f, -3.0f)
-    };
-    uint3 indices[1] = { make_uint3(0u, 1u, 2u) };
+bool OptixBackend::buildTriangleGAS(const scene::SceneDesc& sceneDesc) {
+    if (sceneDesc.meshes.empty() || !sceneDesc.meshes[0].isValid()) {
+        std::cerr << "[OptixBackend] ERROR: SceneDesc.meshes[0] is missing or invalid (need positions + indices)." << std::endl;
+        return false;
+    }
 
-    // Upload buffers
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_vertices_), sizeof(vertices)));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_vertices_), vertices, sizeof(vertices), cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_indices_), sizeof(indices)));
-    CUDA_CHECK(cudaMemcpy(reinterpret_cast<void*>(d_indices_), indices, sizeof(indices), cudaMemcpyHostToDevice));
+    const scene::MeshData& mesh = sceneDesc.meshes[0];
+
+    std::vector<float3> vertices;
+    vertices.reserve(mesh.positions.size());
+    for (const glm::vec3& p : mesh.positions) {
+        vertices.push_back(make_float3(p.x, p.y, p.z));
+    }
+
+    std::vector<uint3> indices;
+    indices.reserve(mesh.indices.size());
+    for (const glm::uvec3& tri : mesh.indices) {
+        indices.push_back(make_uint3(tri.x, tri.y, tri.z));
+    }
+
+    // (Re)upload buffers
+    if (d_vertices_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_vertices_)));
+        d_vertices_ = 0;
+    }
+    if (d_indices_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_indices_)));
+        d_indices_ = 0;
+    }
+
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_vertices_), sizeof(float3) * vertices.size()));
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*>(d_vertices_),
+        vertices.data(),
+        sizeof(float3) * vertices.size(),
+        cudaMemcpyHostToDevice
+    ));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_indices_), sizeof(uint3) * indices.size()));
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*>(d_indices_),
+        indices.data(),
+        sizeof(uint3) * indices.size(),
+        cudaMemcpyHostToDevice
+    ));
 
     OptixBuildInput build_input = {};
     build_input.type = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
     build_input.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
     build_input.triangleArray.vertexStrideInBytes = sizeof(float3);
-    build_input.triangleArray.numVertices = 3;
+    build_input.triangleArray.numVertices = static_cast<unsigned int>(vertices.size());
     triangle_vertex_buffers_[0] = d_vertices_;
     build_input.triangleArray.vertexBuffers = triangle_vertex_buffers_.data();
 
     build_input.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
     build_input.triangleArray.indexStrideInBytes = sizeof(uint3);
-    build_input.triangleArray.numIndexTriplets = 1;
+    build_input.triangleArray.numIndexTriplets = static_cast<unsigned int>(indices.size());
     build_input.triangleArray.indexBuffer = d_indices_;
 
     uint32_t triangle_input_flags = OPTIX_GEOMETRY_FLAG_NONE;
@@ -531,9 +569,13 @@ bool OptixBackend::buildTriangleGAS() {
         &gas_buffer_sizes
     ));
 
-    // Scratch buffer
     CUdeviceptr d_temp_buffer = 0;
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_temp_buffer), gas_buffer_sizes.tempSizeInBytes));
+
+    if (d_gas_buffer_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_gas_buffer_)));
+        d_gas_buffer_ = 0;
+    }
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_gas_buffer_), gas_buffer_sizes.outputSizeInBytes));
 
     OPTIX_CHECK(optixAccelBuild(
@@ -551,12 +593,18 @@ bool OptixBackend::buildTriangleGAS() {
         0
     ));
 
-    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_temp_buffer)));
+    // Required post-build checks
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaStreamSynchronize(stream_));
 
-    // Default top-level handle uses this GAS
+    CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_temp_buffer)));
+    d_temp_buffer = 0;
+
+    // Default top-level handle uses this GAS (later overridden by IAS build)
     top_handle_ = gas_handle_;
-    std::cout << "[OptixBackend] Built triangle GAS" << std::endl;
-    return true;
+    std::cout << "[OptixBackend] Built triangle GAS from SceneDesc (V=" << vertices.size()
+              << ", T=" << indices.size() << ")" << std::endl;
+    return gas_handle_ != 0;
 }
 
 // ========================================
@@ -690,7 +738,7 @@ bool OptixBackend::buildSphereGAS(const scene::SceneDesc& sceneDesc) {
 // ========================================
 // Build Instance Acceleration Structure (IAS/TLAS)
 // ========================================
-bool OptixBackend::buildIAS() {
+bool OptixBackend::buildIAS(const scene::SceneDesc& sceneDesc) {
     std::cout << "[OptixBackend] Building IAS..." << std::endl;
 
     auto sync_and_check = [&](const char* where) {
@@ -707,33 +755,48 @@ bool OptixBackend::buildIAS() {
         return true;
     };
 
-    const bool has_sphere = (gas_sphere_handle_ != 0);
-    const uint32_t num_instances = has_sphere ? 2u : 1u;
+    std::vector<OptixInstance> instances;
+    instances.reserve(sceneDesc.instances.size() + 1);
 
-    OptixInstance instances[2] = {};
-    auto set_identity_transform = [](float m[12]) {
-        m[0] = 1.0f; m[1] = 0.0f; m[2] = 0.0f; m[3] = 0.0f;
-        m[4] = 0.0f; m[5] = 1.0f; m[6] = 0.0f; m[7] = 0.0f;
-        m[8] = 0.0f; m[9] = 0.0f; m[10] = 1.0f; m[11] = 0.0f;
-    };
+    uint32_t next_instance_id = 0;
+    for (const auto& inst : sceneDesc.instances) {
+        if (inst.meshId != 0) {
+            // Minimal debug-first implementation: only meshId==0 is supported.
+            std::cout << "[OptixBackend] NOTE: Skipping instance with meshId=" << inst.meshId << " (only meshId==0 supported for now)" << std::endl;
+            continue;
+        }
 
-    // Instance 0: triangle GAS, sbtOffset=0
-    set_identity_transform(instances[0].transform);
-    instances[0].instanceId = 0;
-    instances[0].sbtOffset = 0;
-    instances[0].visibilityMask = 0xFF;
-    instances[0].flags = OPTIX_INSTANCE_FLAG_NONE;
-    instances[0].traversableHandle = gas_handle_;
-
-    if (has_sphere) {
-        // Instance 1: sphere GAS, sbtOffset=1
-        set_identity_transform(instances[1].transform);
-        instances[1].instanceId = 1;
-        instances[1].sbtOffset = 1;
-        instances[1].visibilityMask = 0xFF;
-        instances[1].flags = OPTIX_INSTANCE_FLAG_NONE;
-        instances[1].traversableHandle = gas_sphere_handle_;
+        OptixInstance oi = {};
+        glmMat4ToOptixTransformRowMajor3x4(inst.worldFromObject, oi.transform);
+        oi.instanceId = next_instance_id++;
+        oi.sbtOffset = 0;  // triangles hitgroup record
+        oi.visibilityMask = 0xFF;
+        oi.flags = OPTIX_INSTANCE_FLAG_NONE;
+        oi.traversableHandle = gas_handle_;
+        instances.push_back(oi);
     }
+
+    const bool has_sphere = (gas_sphere_handle_ != 0);
+    if (has_sphere) {
+        OptixInstance oi = {};
+        // Identity transform
+        oi.transform[0] = 1.0f; oi.transform[1] = 0.0f; oi.transform[2] = 0.0f; oi.transform[3] = 0.0f;
+        oi.transform[4] = 0.0f; oi.transform[5] = 1.0f; oi.transform[6] = 0.0f; oi.transform[7] = 0.0f;
+        oi.transform[8] = 0.0f; oi.transform[9] = 0.0f; oi.transform[10] = 1.0f; oi.transform[11] = 0.0f;
+        oi.instanceId = next_instance_id++;
+        oi.sbtOffset = 1;  // sphere hitgroup record
+        oi.visibilityMask = 0xFF;
+        oi.flags = OPTIX_INSTANCE_FLAG_NONE;
+        oi.traversableHandle = gas_sphere_handle_;
+        instances.push_back(oi);
+    }
+
+    if (instances.empty()) {
+        std::cerr << "[OptixBackend] ERROR: No instances to build IAS (SceneDesc.instances produced none; sphere=" << (has_sphere ? "yes" : "no") << ")" << std::endl;
+        return false;
+    }
+
+    const uint32_t num_instances = static_cast<uint32_t>(instances.size());
 
     if (d_instances_ != 0) {
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_instances_)));
@@ -742,7 +805,7 @@ bool OptixBackend::buildIAS() {
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_instances_), sizeof(OptixInstance) * num_instances));
     CUDA_CHECK(cudaMemcpy(
         reinterpret_cast<void*>(d_instances_),
-        instances,
+        instances.data(),
         sizeof(OptixInstance) * num_instances,
         cudaMemcpyHostToDevice
     ));
@@ -831,8 +894,8 @@ bool OptixBackend::build(const scene::SceneDesc& sceneDesc) {
         return false;
     }
 
-    // Build minimal triangle GAS
-    if (!buildTriangleGAS()) {
+    // Build triangle GAS from SceneDesc
+    if (!buildTriangleGAS(sceneDesc)) {
         return false;
     }
 
@@ -843,7 +906,7 @@ bool OptixBackend::build(const scene::SceneDesc& sceneDesc) {
     }
 
     // Build IAS combining triangle + optional sphere
-    if (!buildIAS()) {
+    if (!buildIAS(sceneDesc)) {
         return false;
     }
 

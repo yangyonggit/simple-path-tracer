@@ -115,9 +115,9 @@ private:
     bool createProgramGroups();
     bool createPipeline();
     bool createSBT();
-    bool buildTriangleGAS();
+    bool buildTriangleGAS(const scene::SceneDesc& sceneDesc);
     bool buildSphereGAS(const scene::SceneDesc& sceneDesc);
-    bool buildIAS();
+    bool buildIAS(const scene::SceneDesc& sceneDesc);
     void allocateOutputBuffer(int width, int height);
     
     // Logging callback
