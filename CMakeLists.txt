@@ -25,7 +25,37 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(GLEW REQUIRED)
 find_package(TBB CONFIG REQUIRED)
 find_package(CUDA REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 find_path(TINYGLTF_INCLUDE_DIRS "tiny_gltf.h")
+
+# Compile CUDA device programs to PTX
+set(CUDA_DEVICE_PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/src/optix/device_programs.cu)
+
+# PTX will be placed in the same directory as the executable (with config subdirectory)
+set(PTX_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin/$<CONFIG>/device_programs.ptx)
+
+# Add custom command to compile CUDA to PTX for each configuration
+add_custom_command(
+    OUTPUT device_programs_ptx_stamp
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin/$<CONFIG>
+    COMMAND ${CMAKE_CUDA_COMPILER} 
+        --ptx
+        -arch=compute_75
+        -I${CMAKE_CURRENT_SOURCE_DIR}/include
+        -I${OPTIX_ROOT}/include
+        -I${CUDAToolkit_INCLUDE_DIRS}
+        ${CUDA_DEVICE_PROGRAMS}
+        -o ${CMAKE_BINARY_DIR}/bin/$<CONFIG>/device_programs.ptx
+    COMMAND ${CMAKE_COMMAND} -E touch device_programs_ptx_stamp
+    DEPENDS ${CUDA_DEVICE_PROGRAMS}
+    COMMENT "Compiling CUDA device programs to PTX for $<CONFIG>"
+    VERBATIM
+)
+
+# Create target that depends on PTX generation
+add_custom_target(device_programs_ptx ALL
+    DEPENDS device_programs_ptx_stamp
+)
 
 # Create executable
 add_executable(${PROJECT_NAME} 
@@ -44,6 +74,7 @@ add_executable(${PROJECT_NAME}
     src/wavefront/wf_pt_cpu.cpp
     src/scene/SceneBuilder.cpp
     src/backends/EmbreeBackend.cpp
+    src/backends/OptixBackend.cpp
 )
 
 # Add include directories
@@ -59,7 +90,19 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 target_link_libraries(${PROJECT_NAME} 
     embree glm::glm-header-only glfw opengl32 GLEW::GLEW TBB::tbb
     ${CUDA_LIBRARIES}
+    CUDA::cudart
 )
+
+# Fix LIBCMT conflict - use dynamic runtime library
+set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+
+# Add linker flag to ignore LIBCMT if still conflicting
+if(MSVC)
+    target_link_options(${PROJECT_NAME} PRIVATE /NODEFAULTLIB:LIBCMT)
+endif()
+
+# Add dependency on PTX compilation
+add_dependencies(${PROJECT_NAME} device_programs_ptx)
 
 # Set CUDA compile flags for better GPU utilization
 set_target_properties(${PROJECT_NAME} PROPERTIES

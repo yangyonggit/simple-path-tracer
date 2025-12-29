@@ -7,6 +7,7 @@
 #include "GLRenderer.h"
 #include "scene/SceneBuilder.h"
 #include "backends/EmbreeBackend.h"
+#include "backends/OptixBackend.h"
 
 // Command line options structure
 struct CommandLineOptions {
@@ -75,6 +76,7 @@ void showHelp(const char* program_name) {
     std::cout << "  WASD      - Move camera" << std::endl;
     std::cout << "  Mouse     - Look around" << std::endl;
     std::cout << "  T         - Toggle Wavefront integrator test (CPU)" << std::endl;
+    std::cout << "  G         - Toggle GPU rendering (OptiX)" << std::endl;
     std::cout << "  ESC       - Exit" << std::endl;
     std::cout << std::endl;
 }
@@ -157,6 +159,15 @@ int main(int argc, char* argv[]) {
     }
     
     std::cout << "Embree scene built successfully." << std::endl;
+    
+    // Build OptiX backend (GPU)
+    std::cout << "Building OptiX pipeline..." << std::endl;
+    backends::OptixBackend optixBackend;
+    if (!optixBackend.build(sceneDesc)) {
+        std::cerr << "Failed to build OptiX backend! GPU rendering will be unavailable." << std::endl;
+    } else {
+        std::cout << "OptiX pipeline built successfully. Press 'G' to toggle GPU rendering." << std::endl;
+    }
 
     std::cout << "Scene created. Initializing renderer..." << std::endl;
     
@@ -208,7 +219,7 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl;
 
     // Start the main rendering loop
-    renderer.renderLoop(embreeBackend, sceneDesc, camera, path_tracer);
+    renderer.renderLoop(embreeBackend, optixBackend, sceneDesc, camera, path_tracer);
 
     std::cout << "Path tracer completed successfully!" << std::endl;
     return 0;

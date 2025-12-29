@@ -22,6 +22,7 @@ class PathTracer;
 
 namespace backends {
     class EmbreeBackend;
+    class OptixBackend;
 }
 
 namespace scene {
@@ -44,7 +45,9 @@ private:
     bool m_camera_moved = true;
     std::atomic<int> m_tiles_completed{0};
     bool m_test_wavefront = false;  // Flag to test wavefront integrator
+    bool m_use_gpu_rendering = false;  // Flag to use GPU (OptiX) rendering
     std::unique_ptr<wf::WavefrontPathTracerCPU> m_wf_path_tracer;
+    backends::OptixBackend* m_optix_backend = nullptr;  // Reference to OptiX backend
     
     // Input state
     bool m_keys[1024] = {false};
@@ -76,7 +79,8 @@ public:
     void cleanup();
     
     // Main rendering loop
-    void renderLoop(backends::EmbreeBackend& backend, const scene::SceneDesc& sceneDesc,
+    void renderLoop(backends::EmbreeBackend& backend, backends::OptixBackend& optixBackend,
+                   const scene::SceneDesc& sceneDesc,
                    Camera& camera, PathTracer& path_tracer);
     
     // Camera management

@@ -6,6 +6,7 @@
 #include "wavefront/wf_pt_cpu.h"
 #include "wavefront/wf_math.h"
 #include "backends/EmbreeBackend.h"
+#include "backends/OptixBackend.h"
 #include "scene/SceneDesc.h"
 #include <iostream>
 #include <algorithm>
@@ -107,9 +108,13 @@ void GLRenderer::setupCallbacks() {
     glfwSetMouseButtonCallback(m_window, mouseButtonCallback);
 }
 
-void GLRenderer::renderLoop(backends::EmbreeBackend& backend, const scene::SceneDesc& sceneDesc,
+void GLRenderer::renderLoop(backends::EmbreeBackend& backend, backends::OptixBackend& optixBackend,
+                           const scene::SceneDesc& sceneDesc,
                            Camera& camera, PathTracer& path_tracer) {
     setCamera(&camera);
+    
+    // Store OptixBackend reference
+    m_optix_backend = &optixBackend;
     
     // Get RTCScene from backend
     RTCScene rtcScene = backend.getScene();
@@ -146,12 +151,16 @@ void GLRenderer::renderLoop(backends::EmbreeBackend& backend, const scene::Scene
         // Increment sample count
         ++m_accumulated_samples;
         
-        // Test wavefront path tracer if enabled
-        if (m_test_wavefront) {
+        // Choose rendering backend
+        if (m_use_gpu_rendering) {
+            // Use OptiX GPU rendering
+            m_optix_backend->render(image.data(), IMAGE_WIDTH, IMAGE_HEIGHT);
+        } else if (m_test_wavefront) {
+            // Test wavefront path tracer (CPU)
             renderWavefront(image, camera, rtcScene, path_tracer,
                            m_accumulation_buffer, m_accumulated_samples);
         } else {
-            // Render image using PathTracer's parallel processing
+            // Use CPU path tracer (Embree)
             path_tracer.renderImage(image, IMAGE_WIDTH, IMAGE_HEIGHT, camera, rtcScene,
                                    m_accumulation_buffer, m_accumulated_samples,
                                    m_camera_moved, m_tiles_completed);
@@ -248,6 +257,14 @@ void GLRenderer::keyCallback(GLFWwindow* window, int key, int scancode, int acti
         s_instance->m_accumulated_samples = 0;
         std::fill(s_instance->m_accumulation_buffer.begin(), s_instance->m_accumulation_buffer.end(), glm::vec3(0.0f));
         std::cout << "Wavefront integrator test: " << (s_instance->m_test_wavefront ? "ON" : "OFF") << std::endl;
+    }
+    
+    // Toggle GPU rendering with 'G' key
+    if (key == GLFW_KEY_G && action == GLFW_PRESS) {
+        s_instance->m_use_gpu_rendering = !s_instance->m_use_gpu_rendering;
+        s_instance->m_accumulated_samples = 0;
+        std::fill(s_instance->m_accumulation_buffer.begin(), s_instance->m_accumulation_buffer.end(), glm::vec3(0.0f));
+        std::cout << "GPU rendering (OptiX): " << (s_instance->m_use_gpu_rendering ? "ON" : "OFF") << std::endl;
     }
     
     if (key >= 0 && key < 1024) {
