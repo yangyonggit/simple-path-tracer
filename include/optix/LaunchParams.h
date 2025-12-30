@@ -71,6 +71,7 @@ struct LaunchParams {
     uint32_t* rayQueueOut;
     uint32_t* shadeQueue;
     uint32_t* rayQueueCounter;
+    uint32_t* rayQueueOutCounter;
     uint32_t* shadeQueueCounter;
     DeviceMaterial* materials;
     int materialCount;

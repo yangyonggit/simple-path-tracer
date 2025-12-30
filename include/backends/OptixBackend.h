@@ -99,6 +99,7 @@ private:
     CUdeviceptr d_ray_queue_out_ = 0;
     CUdeviceptr d_shade_queue_ = 0;
     CUdeviceptr d_ray_queue_counter_ = 0;
+    CUdeviceptr d_ray_queue_out_counter_ = 0;
     CUdeviceptr d_shade_queue_counter_ = 0;
     CUdeviceptr d_materials_ = 0;
     uint32_t wavefront_capacity_ = 0; // == width*height

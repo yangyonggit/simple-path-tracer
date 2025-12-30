@@ -64,6 +64,37 @@ static __forceinline__ __device__ uint32_t wang_hash(uint32_t a) {
     return a;
 }
 
+static __forceinline__ __device__ float rng_next01(uint32_t& state) {
+    state = wang_hash(state);
+    // Use 24 high-ish bits to build [0,1)
+    return static_cast<float>(state & 0x00FFFFFFu) * (1.0f / 16777216.0f);
+}
+
+static __forceinline__ __device__ float3 f3_cross(const float3 a, const float3 b) {
+    return make_float3(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x);
+}
+
+static __forceinline__ __device__ float3 cosine_sample_hemisphere(const float u1, const float u2) {
+    const float r = sqrtf(u1);
+    const float phi = 2.0f * 3.14159265358979323846f * u2;
+    float s, c;
+    sincosf(phi, &s, &c);
+    const float x = r * c;
+    const float y = r * s;
+    const float z = sqrtf(fmaxf(0.0f, 1.0f - u1));
+    return make_float3(x, y, z);
+}
+
+static __forceinline__ __device__ void make_onb(const float3& n, float3& t, float3& b) {
+    const float3 up = (fabsf(n.z) < 0.999f) ? make_float3(0.0f, 0.0f, 1.0f) : make_float3(1.0f, 0.0f, 0.0f);
+    t = f3_cross(up, n);
+    t = f3_normalize(t);
+    b = f3_cross(n, t);
+}
+
 static __forceinline__ __device__ void computePrimaryRay(
     const unsigned int x,
     const unsigned int y,
@@ -171,13 +202,27 @@ extern "C" __global__ void __raygen__shade() {
     }
 
     const uint32_t pathId = params.shadeQueue[tid];
-    const PathState ps = params.paths[pathId];
+    PathState ps = params.paths[pathId];
     const HitRecord hr = params.hitRecords[pathId];
 
-    float3 c;
+    const uint32_t pixel = ps.pixelIndex;
+    if (pixel >= capacity) {
+        return;
+    }
+
+    // Termination conditions: miss or maxDepth reached.
     if (hr.t < 0.0f) {
-        c = make_float3(0.1f, 0.1f, 0.1f);
-    } else {
+        const float3 c = make_float3(0.1f, 0.1f, 0.1f);
+        const float4 old = params.accum[pixel];
+        params.accum[pixel] = make_float4(old.x + ps.throughput.x * c.x,
+                                          old.y + ps.throughput.y * c.y,
+                                          old.z + ps.throughput.z * c.z,
+                                          old.w + 1.0f);
+        return;
+    }
+
+    if (ps.depth >= static_cast<uint32_t>(params.maxDepth)) {
+        // Minimal verifiable shading: normal visualization, modulated by throughput.
         float3 n = hr.Ng;
         const float len2 = n.x * n.x + n.y * n.y + n.z * n.z;
         if (len2 > 0.0f) {
@@ -185,16 +230,47 @@ extern "C" __global__ void __raygen__shade() {
         } else {
             n = make_float3(0.0f, 1.0f, 0.0f);
         }
-        c = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
-    }
-
-    const uint32_t pixel = ps.pixelIndex;
-    if (pixel >= capacity) {
+        const float3 c = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
+        const float4 old = params.accum[pixel];
+        params.accum[pixel] = make_float4(old.x + ps.throughput.x * c.x,
+                                          old.y + ps.throughput.y * c.y,
+                                          old.z + ps.throughput.z * c.z,
+                                          old.w + 1.0f);
         return;
     }
 
-    const float4 old = params.accum[pixel];
-    params.accum[pixel] = make_float4(old.x + c.x, old.y + c.y, old.z + c.z, old.w + 1.0f);
+    // Spawn next diffuse bounce.
+    float3 n = hr.Ng;
+    const float len2 = n.x * n.x + n.y * n.y + n.z * n.z;
+    if (len2 > 0.0f) {
+        n = f3_scale(n, rsqrtf(len2));
+    } else {
+        n = make_float3(0.0f, 1.0f, 0.0f);
+    }
+
+    const float3 P = f3_add(ps.origin, f3_scale(ps.direction, hr.t));
+
+    uint32_t rng = ps.rng;
+    const float u1 = rng_next01(rng);
+    const float u2 = rng_next01(rng);
+    const float3 local = cosine_sample_hemisphere(u1, u2);
+    float3 t, b;
+    make_onb(n, t, b);
+    float3 newDir = f3_add(f3_add(f3_scale(t, local.x), f3_scale(b, local.y)), f3_scale(n, local.z));
+    newDir = f3_normalize(newDir);
+
+    ps.origin = f3_add(P, f3_scale(n, 1e-3f));
+    ps.direction = newDir;
+    ps.depth = ps.depth + 1u;
+    ps.throughput = f3_scale(ps.throughput, 0.8f);
+    ps.rng = rng;
+
+    params.paths[pathId] = ps;
+
+    const uint32_t outIdx = atomicAdd(reinterpret_cast<unsigned int*>(params.rayQueueOutCounter), 1u);
+    if (outIdx < capacity) {
+        params.rayQueueOut[outIdx] = pathId;
+    }
 }
 
 // ========================================
@@ -256,8 +332,11 @@ extern "C" __global__ void __miss__ms_wf() {
     hr.Ng = make_float3(0.0f, 0.0f, 0.0f);
     hr.materialId = -1;
 
+    const uint32_t capacity = static_cast<uint32_t>(params.image_width) * static_cast<uint32_t>(params.image_height);
     const uint32_t idx = atomicAdd(reinterpret_cast<unsigned int*>(params.shadeQueueCounter), 1u);
-    params.shadeQueue[idx] = pathId;
+    if (idx < capacity) {
+        params.shadeQueue[idx] = pathId;
+    }
 }
 
 // ========================================
@@ -274,8 +353,11 @@ extern "C" __global__ void __closesthit__ch_wf() {
     hr.Ng = f3_normalize(f3_neg(wo));
     hr.materialId = 0;
 
+    const uint32_t capacity = static_cast<uint32_t>(params.image_width) * static_cast<uint32_t>(params.image_height);
     const uint32_t idx = atomicAdd(reinterpret_cast<unsigned int*>(params.shadeQueueCounter), 1u);
-    params.shadeQueue[idx] = pathId;
+    if (idx < capacity) {
+        params.shadeQueue[idx] = pathId;
+    }
 }
 
 // ========================================

@@ -1192,7 +1192,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
         d_paths_ != 0 && d_hit_records_ != 0 &&
         d_accum_ != 0 &&
         d_ray_queue_in_ != 0 && d_ray_queue_out_ != 0 && d_shade_queue_ != 0 &&
-        d_ray_queue_counter_ != 0 && d_shade_queue_counter_ != 0 &&
+        d_ray_queue_counter_ != 0 && d_ray_queue_out_counter_ != 0 && d_shade_queue_counter_ != 0 &&
         d_materials_ != 0) {
         return;
     }
@@ -1211,6 +1211,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
     freeIf(d_ray_queue_out_);
     freeIf(d_shade_queue_);
     freeIf(d_ray_queue_counter_);
+    freeIf(d_ray_queue_out_counter_);
     freeIf(d_shade_queue_counter_);
     freeIf(d_materials_);
 
@@ -1228,6 +1229,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_out_), queue_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_shade_queue_), queue_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_counter_), counter_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_out_counter_), counter_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_shade_queue_counter_), counter_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_materials_), materials_bytes));
 
@@ -1258,6 +1260,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
         std::cout << "  rayQueueOut: " << queue_bytes << " bytes" << std::endl;
         std::cout << "  shadeQueue: " << queue_bytes << " bytes" << std::endl;
         std::cout << "  rayQueueCounter: " << counter_bytes << " bytes" << std::endl;
+        std::cout << "  rayQueueOutCounter: " << counter_bytes << " bytes" << std::endl;
         std::cout << "  shadeQueueCounter: " << counter_bytes << " bytes" << std::endl;
         std::cout << "  materials: " << materials_bytes << " bytes (count=" << material_count_ << ")" << std::endl;
     }
@@ -1291,6 +1294,7 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     launch_params.rayQueueOut = reinterpret_cast<uint32_t*>(d_ray_queue_out_);
     launch_params.shadeQueue = reinterpret_cast<uint32_t*>(d_shade_queue_);
     launch_params.rayQueueCounter = reinterpret_cast<uint32_t*>(d_ray_queue_counter_);
+    launch_params.rayQueueOutCounter = reinterpret_cast<uint32_t*>(d_ray_queue_out_counter_);
     launch_params.shadeQueueCounter = reinterpret_cast<uint32_t*>(d_shade_queue_counter_);
     launch_params.materials = reinterpret_cast<optix::DeviceMaterial*>(d_materials_);
     launch_params.materialCount = material_count_;
@@ -1332,9 +1336,12 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_launch_params_), sizeof(optix::LaunchParams)));
     }
 
-    // Per-frame: reset wavefront counters (required by scaffolding)
+    // Per-frame: reset wavefront counters
     if (d_ray_queue_counter_ != 0) {
         CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_ray_queue_counter_), 0, sizeof(uint32_t), stream_));
+    }
+    if (d_ray_queue_out_counter_ != 0) {
+        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_ray_queue_out_counter_), 0, sizeof(uint32_t), stream_));
     }
     if (d_shade_queue_counter_ != 0) {
         CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_shade_queue_counter_), 0, sizeof(uint32_t), stream_));
@@ -1381,13 +1388,32 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
         ray_queue_count = capacity;
     }
 
-    // 2) trace: consume rayQueueIn[0..N) and write hitRecords + shadeQueue (no fb writes)
-    if (d_shade_queue_counter_ != 0) {
-        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_shade_queue_counter_), 0, sizeof(uint32_t), stream_));
+    // Frame-0 validation header (must print once)
+    const bool log_frame0 = (launch_params.frameIndex == 0u);
+    if (log_frame0) {
+        std::cout << "[Wavefront] rayQueueCount = " << ray_queue_count
+                  << " (expect " << capacity << ")" << std::endl;
     }
-    {
-        if (ray_queue_count > 0u) {
-            // Copy launch params to device (unchanged)
+
+    // 2..(2*maxDepth+1)) multi-bounce wavefront loop: trace(N) -> shade(M) -> nextN
+    uint32_t N = ray_queue_count;
+
+    uint32_t* rayQueueInPtr = launch_params.rayQueueIn;
+    uint32_t* rayQueueOutPtr = launch_params.rayQueueOut;
+    uint32_t* rayQueueInCounterPtr = launch_params.rayQueueCounter;
+    uint32_t* rayQueueOutCounterPtr = launch_params.rayQueueOutCounter;
+
+    for (int depth = 0; depth < launch_params.maxDepth && N > 0u; ++depth) {
+        // Reset shade queue counter
+        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_shade_queue_counter_), 0, sizeof(uint32_t), stream_));
+
+        // Launch trace(N)
+        {
+            launch_params.rayQueueIn = rayQueueInPtr;
+            launch_params.rayQueueOut = rayQueueOutPtr;
+            launch_params.rayQueueCounter = rayQueueInCounterPtr;
+            launch_params.rayQueueOutCounter = rayQueueOutCounterPtr;
+
             CUDA_CHECK(cudaMemcpy(
                 reinterpret_cast<void*>(d_launch_params_),
                 &launch_params,
@@ -1402,30 +1428,36 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
                 d_launch_params_,
                 sizeof(optix::LaunchParams),
                 sbt_,
-                ray_queue_count,
+                N,
                 1,
                 1
             ));
         }
-    }
 
-    // Read shade queue count every frame (for shade launch dimension).
-    uint32_t shade_queue_count = 0u;
-    CUDA_CHECK(cudaMemcpyAsync(
-        &shade_queue_count,
-        reinterpret_cast<void*>(d_shade_queue_counter_),
-        sizeof(uint32_t),
-        cudaMemcpyDeviceToHost,
-        stream_
-    ));
-    CUDA_CHECK(cudaStreamSynchronize(stream_));
-    if (shade_queue_count > capacity) {
-        shade_queue_count = capacity;
-    }
+        // Read M = shadeQueueCounter
+        uint32_t M = 0u;
+        CUDA_CHECK(cudaMemcpyAsync(
+            &M,
+            reinterpret_cast<void*>(d_shade_queue_counter_),
+            sizeof(uint32_t),
+            cudaMemcpyDeviceToHost,
+            stream_
+        ));
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        if (M > capacity) {
+            M = capacity;
+        }
 
-    // 3) shade: consume shadeQueue[0..M) and write accum (no fb writes)
-    {
-        if (shade_queue_count > 0u) {
+        // Reset out-ray counter
+        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(rayQueueOutCounterPtr), 0, sizeof(uint32_t), stream_));
+
+        // Launch shade(M)
+        {
+            launch_params.rayQueueIn = rayQueueInPtr;
+            launch_params.rayQueueOut = rayQueueOutPtr;
+            launch_params.rayQueueCounter = rayQueueInCounterPtr;
+            launch_params.rayQueueOutCounter = rayQueueOutCounterPtr;
+
             CUDA_CHECK(cudaMemcpy(
                 reinterpret_cast<void*>(d_launch_params_),
                 &launch_params,
@@ -1440,23 +1472,38 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
                 d_launch_params_,
                 sizeof(optix::LaunchParams),
                 sbt_,
-                shade_queue_count,
+                M,
                 1,
                 1
             ));
         }
-    }
 
-    // Frame-0 validation logs (must print once)
-    if (launch_params.frameIndex == 0u) {
-        std::cout << "[Wavefront] rayQueueCount = " << ray_queue_count
-                  << " (expect " << capacity << ")" << std::endl;
-        std::cout << "[Wavefront] shadeQueueCount = " << shade_queue_count
-                  << " (expect " << ray_queue_count << ")" << std::endl;
-        std::cout << "[Wavefront] shadeLaunchCount = " << shade_queue_count << std::endl;
+        // Read nextN = out counter
+        uint32_t nextN = 0u;
+        CUDA_CHECK(cudaMemcpyAsync(
+            &nextN,
+            reinterpret_cast<void*>(rayQueueOutCounterPtr),
+            sizeof(uint32_t),
+            cudaMemcpyDeviceToHost,
+            stream_
+        ));
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        if (nextN > capacity) {
+            nextN = capacity;
+        }
+
+        if (log_frame0) {
+            std::cout << "[Wavefront] depth " << depth << ": rays " << N
+                      << " -> hits " << M << " -> next " << nextN << std::endl;
+        }
+
+        // Swap in/out queues and counters for next bounce
+        std::swap(rayQueueInPtr, rayQueueOutPtr);
+        std::swap(rayQueueInCounterPtr, rayQueueOutCounterPtr);
+        N = nextN;
     }
     
-    // 4) Original raygen: renders debug color / geom coloring into framebuffer (must remain unchanged)
+    // 6) Original raygen: renders debug color / geom coloring into framebuffer (must remain unchanged)
     sbt_->raygenRecord = raygen_record_;
 
     // Copy launch params to device
@@ -1565,6 +1612,10 @@ void OptixBackend::destroy() {
     if (d_ray_queue_counter_ != 0) {
         cudaFree(reinterpret_cast<void*>(d_ray_queue_counter_));
         d_ray_queue_counter_ = 0;
+    }
+    if (d_ray_queue_out_counter_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_ray_queue_out_counter_));
+        d_ray_queue_out_counter_ = 0;
     }
     if (d_shade_queue_counter_ != 0) {
         cudaFree(reinterpret_cast<void*>(d_shade_queue_counter_));
