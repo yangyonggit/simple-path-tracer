@@ -1,6 +1,8 @@
 #include <optix.h>
 #include <optix_device.h>
 
+#include <cuda_runtime.h>
+
 #include "optix/LaunchParams.h"
 
 using namespace optix;
@@ -10,6 +12,19 @@ using namespace optix;
 // ========================================
 struct HitgroupData {
     int geomType;  // 0=triangles, 1=spheres
+
+    // Triangles
+    const float3* vertices;
+    const uint3* indices;
+    const float3* normals;  // optional (can be nullptr)
+
+    // Spheres
+    const float3* centers;
+    const float* radii;
+
+    // Materials
+    int materialId;              // per-geometry fallback
+    const int* materialIds;      // optional per-primitive material ids
 };
 
 // ========================================
@@ -355,15 +370,66 @@ extern "C" __global__ void __miss__ms_wf() {
 // Wavefront Closest Hit Program (rayType=1)
 // ========================================
 extern "C" __global__ void __closesthit__ch_wf() {
+    const HitgroupData* hg = reinterpret_cast<const HitgroupData*>(optixGetSbtDataPointer());
     const uint32_t pathId = optixGetPayload_0();
     HitRecord& hr = params.hitRecords[pathId];
     hr.pathId = pathId;
-    hr.t = optixGetRayTmax();
+    const float t = optixGetRayTmax();
+    hr.t = t;
 
-    // Placeholder normal: view normal
-    const float3 wo = optixGetWorldRayDirection();
-    hr.Ng = f3_normalize(f3_neg(wo));
-    hr.materialId = 0;
+    const float3 O = optixGetWorldRayOrigin();
+    const float3 D = optixGetWorldRayDirection();
+    const float3 P = f3_add(O, f3_scale(D, t));
+
+    float3 Ng = make_float3(0.0f, 1.0f, 0.0f);
+    int materialId = 0;
+
+    const int geomType = hg ? hg->geomType : 0;
+    if (geomType == 0) {
+        // Triangles: compute geometric normal from vertex positions.
+        const int primId = optixGetPrimitiveIndex();
+        const uint3 tri = hg->indices[primId];
+        const float3 v0 = hg->vertices[tri.x];
+        const float3 v1 = hg->vertices[tri.y];
+        const float3 v2 = hg->vertices[tri.z];
+
+        const float3 e1 = f3_add(v1, f3_neg(v0));
+        const float3 e2 = f3_add(v2, f3_neg(v0));
+        float3 Ng_obj = f3_cross(e1, e2);
+        Ng_obj = f3_normalize(Ng_obj);
+
+        // Transform to world space (handles instancing transforms correctly).
+        Ng = optixTransformNormalFromObjectToWorldSpace(Ng_obj);
+        Ng = f3_normalize(Ng);
+
+        if (Ng.x * D.x + Ng.y * D.y + Ng.z * D.z > 0.0f) {
+            Ng = f3_neg(Ng);
+        }
+
+        materialId = hg ? hg->materialId : 0;
+    } else {
+        // Spheres: compute normal from hit point and center.
+        const int primId = optixGetPrimitiveIndex();
+        const float3 P_obj = optixTransformPointFromWorldToObjectSpace(P);
+        const float3 C_obj = hg->centers[primId];
+        float3 Ng_obj = f3_add(P_obj, f3_neg(C_obj));
+        Ng_obj = f3_normalize(Ng_obj);
+
+        Ng = optixTransformNormalFromObjectToWorldSpace(Ng_obj);
+        Ng = f3_normalize(Ng);
+        if (Ng.x * D.x + Ng.y * D.y + Ng.z * D.z > 0.0f) {
+            Ng = f3_neg(Ng);
+        }
+
+        if (hg && hg->materialIds) {
+            materialId = hg->materialIds[primId];
+        } else {
+            materialId = hg ? hg->materialId : 0;
+        }
+    }
+
+    hr.Ng = Ng;
+    hr.materialId = materialId;
 
     const uint32_t capacity = static_cast<uint32_t>(params.image_width) * static_cast<uint32_t>(params.image_height);
     const uint32_t idx = atomicAdd(reinterpret_cast<unsigned int*>(params.shadeQueueCounter), 1u);

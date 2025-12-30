@@ -129,10 +129,14 @@ private:
     // Sphere geometry (OPTIX_BUILD_INPUT_TYPE_SPHERES)
     CUdeviceptr d_sphere_centers_ = 0;  // float3[1]
     CUdeviceptr d_sphere_radii_ = 0;    // float[1]
+    CUdeviceptr d_sphere_material_ids_ = 0; // int[sphereCount]
     std::array<CUdeviceptr, 1> sphere_center_buffers_{};
     std::array<CUdeviceptr, 1> sphere_radius_buffers_{};
     CUdeviceptr d_gas_sphere_buffer_ = 0;
     OptixTraversableHandle gas_sphere_handle_ = 0;
+
+    int triangle_material_id_ = 0;
+    int sphere_default_material_id_ = 0;
 
     // Instance acceleration structure (IAS/TLAS)
     CUdeviceptr d_instances_ = 0;

@@ -14,9 +14,14 @@
 #include <vector>
 #include <cstring>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
+
+#if defined(_WIN32)
+#include <Windows.h>
+#endif
 
 #include "Camera.h"
 
@@ -72,6 +77,19 @@ using RaygenRecord = SbtRecord<int>;    // Empty data for now
 using MissRecord = SbtRecord<int>;      // Empty data for now
 struct HitgroupData {
     int geomType;  // 0=triangles, 1=spheres
+
+    // Triangles
+    const float3* vertices;
+    const uint3* indices;
+    const float3* normals;  // optional (can be nullptr)
+
+    // Spheres
+    const float3* centers;
+    const float* radii;
+
+    // Materials
+    int materialId;              // per-geometry fallback
+    const int* materialIds;      // optional per-primitive material ids (nullptr if unused)
 };
 using HitgroupRecord = SbtRecord<HitgroupData>;
 
@@ -746,8 +764,22 @@ bool OptixBackend::createSBT() {
         //   idx 1: rayType 1 (wavefront)
         OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_prog_group_, &records[0]));
         records[0].data.geomType = 0;
+        records[0].data.vertices = reinterpret_cast<const float3*>(static_cast<uintptr_t>(d_vertices_));
+        records[0].data.indices = reinterpret_cast<const uint3*>(static_cast<uintptr_t>(d_indices_));
+        records[0].data.normals = nullptr;
+        records[0].data.centers = nullptr;
+        records[0].data.radii = nullptr;
+        records[0].data.materialId = triangle_material_id_;
+        records[0].data.materialIds = nullptr;
         OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_wf_prog_group_, &records[1]));
         records[1].data.geomType = 0;
+        records[1].data.vertices = reinterpret_cast<const float3*>(static_cast<uintptr_t>(d_vertices_));
+        records[1].data.indices = reinterpret_cast<const uint3*>(static_cast<uintptr_t>(d_indices_));
+        records[1].data.normals = nullptr;
+        records[1].data.centers = nullptr;
+        records[1].data.radii = nullptr;
+        records[1].data.materialId = triangle_material_id_;
+        records[1].data.materialIds = nullptr;
 
         if (sbt_geom_count == 2u) {
             // Geometry 1: spheres
@@ -755,8 +787,22 @@ bool OptixBackend::createSBT() {
             //   idx 3: rayType 1 (wavefront)
             OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_sphere_prog_group_, &records[2]));
             records[2].data.geomType = 1;
+            records[2].data.vertices = nullptr;
+            records[2].data.indices = nullptr;
+            records[2].data.normals = nullptr;
+            records[2].data.centers = reinterpret_cast<const float3*>(static_cast<uintptr_t>(d_sphere_centers_));
+            records[2].data.radii = reinterpret_cast<const float*>(static_cast<uintptr_t>(d_sphere_radii_));
+            records[2].data.materialId = sphere_default_material_id_;
+            records[2].data.materialIds = reinterpret_cast<const int*>(static_cast<uintptr_t>(d_sphere_material_ids_));
             OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_sphere_wf_prog_group_, &records[3]));
             records[3].data.geomType = 1;
+            records[3].data.vertices = nullptr;
+            records[3].data.indices = nullptr;
+            records[3].data.normals = nullptr;
+            records[3].data.centers = reinterpret_cast<const float3*>(static_cast<uintptr_t>(d_sphere_centers_));
+            records[3].data.radii = reinterpret_cast<const float*>(static_cast<uintptr_t>(d_sphere_radii_));
+            records[3].data.materialId = sphere_default_material_id_;
+            records[3].data.materialIds = reinterpret_cast<const int*>(static_cast<uintptr_t>(d_sphere_material_ids_));
         }
 
         CUDA_CHECK(cudaMemcpy(
@@ -790,6 +836,13 @@ bool OptixBackend::buildTriangleGAS(const scene::SceneDesc& sceneDesc) {
     }
 
     const scene::MeshData& mesh = sceneDesc.meshes[0];
+
+    // Material: prefer instance materialId when available, else mesh materialId.
+    if (!sceneDesc.instances.empty()) {
+        triangle_material_id_ = static_cast<int>(sceneDesc.instances[0].materialId);
+    } else {
+        triangle_material_id_ = static_cast<int>(mesh.materialId);
+    }
 
     std::vector<float3> vertices;
     vertices.reserve(mesh.positions.size());
@@ -909,12 +962,17 @@ bool OptixBackend::buildSphereGAS(const scene::SceneDesc& sceneDesc) {
     // Minimal: build one sphere array GAS from SceneDesc analytical spheres.
     std::vector<float3> centers;
     std::vector<float> radii;
+    std::vector<int> material_ids;
     centers.reserve(sceneDesc.spheres.size());
     radii.reserve(sceneDesc.spheres.size());
+    material_ids.reserve(sceneDesc.spheres.size());
     for (const auto& s : sceneDesc.spheres) {
         centers.push_back(make_float3(s.center.x, s.center.y, s.center.z));
         radii.push_back(s.radius);
+        material_ids.push_back(static_cast<int>(s.materialId));
     }
+
+    sphere_default_material_id_ = material_ids.empty() ? 0 : material_ids[0];
 
     std::cout << "[OptixBackend] Building sphere GAS from SceneDesc: count=" << centers.size() << std::endl;
     std::cout << "  sphere[0].center: (" << centers[0].x << ", " << centers[0].y << ", " << centers[0].z << ")" << std::endl;
@@ -939,6 +997,19 @@ bool OptixBackend::buildSphereGAS(const scene::SceneDesc& sceneDesc) {
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_sphere_centers_)));
         d_sphere_centers_ = 0;
     }
+
+    // Upload per-sphere material IDs (for wavefront shading)
+    if (d_sphere_material_ids_ != 0) {
+        CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_sphere_material_ids_)));
+        d_sphere_material_ids_ = 0;
+    }
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_sphere_material_ids_), sizeof(int) * material_ids.size()));
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*>(d_sphere_material_ids_),
+        material_ids.data(),
+        sizeof(int) * material_ids.size(),
+        cudaMemcpyHostToDevice
+    ));
     if (d_sphere_radii_ != 0) {
         CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_sphere_radii_)));
         d_sphere_radii_ = 0;
@@ -1739,6 +1810,10 @@ void OptixBackend::destroy() {
     if (d_sphere_radii_ != 0) {
         cudaFree(reinterpret_cast<void*>(d_sphere_radii_));
         d_sphere_radii_ = 0;
+    }
+    if (d_sphere_material_ids_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_sphere_material_ids_));
+        d_sphere_material_ids_ = 0;
     }
     if (d_gas_sphere_buffer_ != 0) {
         cudaFree(reinterpret_cast<void*>(d_gas_sphere_buffer_));
