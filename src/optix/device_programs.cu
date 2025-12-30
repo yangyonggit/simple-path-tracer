@@ -71,6 +71,15 @@ static __forceinline__ __device__ float3 f3_clamp01(const float3 v) {
         fminf(fmaxf(v.z, 0.0f), 1.0f));
 }
 
+static __forceinline__ __device__ float f3_dot(const float3 a, const float3 b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+static __forceinline__ __device__ float3 f3_reflect(const float3 v, const float3 n) {
+    // Reflect vector v around normal n (both assumed normalized-ish)
+    return f3_add(v, f3_scale(n, -2.0f * f3_dot(v, n)));
+}
+
 static __forceinline__ __device__ float3 f3_normalize(const float3 v) {
     const float len2 = v.x * v.x + v.y * v.y + v.z * v.z;
     const float inv_len = rsqrtf(len2);
@@ -236,17 +245,25 @@ extern "C" __global__ void __raygen__shade() {
         return;
     }
 
-    // Material albedo (Lambertian). Fallback = white.
-    float3 albedo = make_float3(1.0f, 1.0f, 1.0f);
+    // Material params.
+    // baseColor is the raw PBR baseColor; diffuseColor is derived in device: baseColor * (1-metallic).
+    float3 baseColor = make_float3(1.0f, 1.0f, 1.0f);
+    float metallic = 0.0f;
+    float roughness = 1.0f;
     if (params.materials != nullptr && params.materialCount > 0) {
         int mid = hr.materialId;
         if (mid < 0) mid = 0;
         if (mid >= params.materialCount) mid = params.materialCount - 1;
         const DeviceMaterial m = params.materials[mid];
-        albedo = m.baseColor;
+        baseColor = m.baseColor;
+        metallic = m.metallic;
+        roughness = m.roughness;
         // Optional safety clamp for debug/validation.
-        albedo = f3_clamp01(albedo);
+        baseColor = f3_clamp01(baseColor);
     }
+
+    const float one_minus_metallic = fminf(fmaxf(1.0f - metallic, 0.0f), 1.0f);
+    const float3 diffuseColor = f3_scale(baseColor, one_minus_metallic);
 
     // Debug must-kill switch: force a visible accum write on the first frame.
     // Flip to 1 temporarily if you suspect resolve/accum wiring.
@@ -323,7 +340,7 @@ extern "C" __global__ void __raygen__shade() {
         }
 
         const float3 nvis = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
-        const float3 shaded = f3_mul(albedo, nvis);
+        const float3 shaded = f3_mul(diffuseColor, nvis);
         atomicAdd(&params.accum[pixel].x, shaded.x * ps.throughput.x);
         atomicAdd(&params.accum[pixel].y, shaded.y * ps.throughput.y);
         atomicAdd(&params.accum[pixel].z, shaded.z * ps.throughput.z);
@@ -342,6 +359,28 @@ extern "C" __global__ void __raygen__shade() {
 
     const float3 P = f3_add(ps.origin, f3_scale(ps.direction, hr.t));
 
+    // Metallic mirror reflection (no GGX, no MIS, no RR).
+    // Keep a simple threshold so validation is obvious.
+    if (metallic > 0.5f) {
+        float3 R = f3_reflect(ps.direction, n);
+        R = f3_normalize(R);
+
+        ps.origin = f3_add(P, f3_scale(n, 1e-3f));
+        ps.direction = R;
+        ps.depth = ps.depth + 1u;
+        // Mirror uses raw baseColor for tinting the reflection.
+        ps.throughput = f3_mul(ps.throughput, baseColor);
+        ps.rng = ps.rng;
+
+        params.paths[pathId] = ps;
+
+        const uint32_t outIdx = atomicAdd(reinterpret_cast<unsigned int*>(params.rayQueueOutCounter), 1u);
+        if (outIdx < capacity) {
+            params.rayQueueOut[outIdx] = pathId;
+        }
+        return;
+    }
+
     uint32_t rng = ps.rng;
     const float u1 = rng_next01(rng);
     const float u2 = rng_next01(rng);
@@ -354,8 +393,8 @@ extern "C" __global__ void __raygen__shade() {
     ps.origin = f3_add(P, f3_scale(n, 1e-3f));
     ps.direction = newDir;
     ps.depth = ps.depth + 1u;
-    // Lambertian with cosine-weighted sampling: throughput *= albedo.
-    ps.throughput = f3_mul(ps.throughput, albedo);
+    // Lambertian with cosine-weighted sampling: throughput *= diffuseColor.
+    ps.throughput = f3_mul(ps.throughput, diffuseColor);
     ps.rng = rng;
 
     params.paths[pathId] = ps;

@@ -88,8 +88,10 @@ glm::vec3 Material::evaluateBRDF(const glm::vec3& N, const glm::vec3& V, const g
 
 optix::DeviceMaterial Material::toDevice() const {
     optix::DeviceMaterial dm{};
-    const glm::vec3 dc = getDiffuseColor();
-    dm.baseColor = make_float3(dc.x, dc.y, dc.z);
+    // IMPORTANT: baseColor is the raw PBR baseColor/albedo (NOT multiplied by (1-metallic)).
+    // Device code derives diffuseColor = baseColor * (1-metallic).
+    const glm::vec3 bc = albedo;
+    dm.baseColor = make_float3(bc.x, bc.y, bc.z);
     dm.metallic = metallic;
     dm.roughness = roughness;
     dm.type = 0;
