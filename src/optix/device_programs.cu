@@ -123,6 +123,74 @@ static __forceinline__ __device__ float3 cosine_sample_hemisphere(const float u1
     return make_float3(x, y, z);
 }
 
+// Forward declaration (used by GGX sampling helpers below)
+static __forceinline__ __device__ void make_onb(const float3& n, float3& t, float3& b);
+
+// ========================================
+// GGX Microfacet helpers (metal branch)
+// ========================================
+static __forceinline__ __device__ float saturate(const float x) {
+    return fminf(fmaxf(x, 0.0f), 1.0f);
+}
+
+static __forceinline__ __device__ float D_GGX(const float3 N, const float3 H, const float alpha) {
+    // NDF (Trowbridge-Reitz GGX)
+    constexpr float kPi = 3.14159265358979323846f;
+    const float cosNH = fmaxf(f3_dot(N, H), 0.0f);
+    const float a2 = alpha * alpha;
+    const float denom = cosNH * cosNH * (a2 - 1.0f) + 1.0f;
+    return a2 / (kPi * denom * denom);
+}
+
+static __forceinline__ __device__ float G1_SchlickGGX(const float cosTheta, const float k) {
+    return cosTheta / (cosTheta * (1.0f - k) + k);
+}
+
+static __forceinline__ __device__ float smithGGX(const float cosNL, const float cosNV, const float alpha) {
+    // Schlick-GGX masking-shadowing approximation.
+    const float a = alpha + 1.0f;
+    const float k = (a * a) * 0.125f; // (alpha+1)^2 / 8
+    return G1_SchlickGGX(cosNL, k) * G1_SchlickGGX(cosNV, k);
+}
+
+static __forceinline__ __device__ float3 fresnelSchlick(const float cosVH, const float3 F0) {
+    const float m = 1.0f - saturate(cosVH);
+    const float m2 = m * m;
+    const float m5 = m2 * m2 * m;
+    const float3 oneMinusF0 = make_float3(1.0f - F0.x, 1.0f - F0.y, 1.0f - F0.z);
+    return f3_add(F0, f3_scale(oneMinusF0, m5));
+}
+
+static __forceinline__ __device__ float3 ggx_sample_half_vector(const float u1, const float u2, const float alpha, const float3 N) {
+    // Sample GGX NDF in local frame, then transform to world using ONB(N).
+    constexpr float kTwoPi = 6.28318530717958647692f;
+
+    const float a2 = alpha * alpha;
+    const float phi = kTwoPi * u1;
+
+    // cosTheta = sqrt((1-u2) / (1 + (a^2 - 1) * u2))
+    const float denom = 1.0f + (a2 - 1.0f) * u2;
+    const float cosTheta = sqrtf(fmaxf(0.0f, (1.0f - u2) / denom));
+    const float sinTheta = sqrtf(fmaxf(0.0f, 1.0f - cosTheta * cosTheta));
+
+    float s, c;
+    sincosf(phi, &s, &c);
+
+    const float3 H_local = make_float3(sinTheta * c, sinTheta * s, cosTheta);
+    float3 t, b;
+    make_onb(N, t, b);
+    float3 H = f3_add(f3_add(f3_scale(t, H_local.x), f3_scale(b, H_local.y)), f3_scale(N, H_local.z));
+
+    // Safe normalize (avoid NaNs if something degenerates)
+    const float len2 = f3_dot(H, H);
+    if (len2 > 0.0f) {
+        H = f3_scale(H, rsqrtf(len2));
+    } else {
+        H = N;
+    }
+    return H;
+}
+
 static __forceinline__ __device__ void make_onb(const float3& n, float3& t, float3& b) {
     const float3 up = (fabsf(n.z) < 0.999f) ? make_float3(0.0f, 0.0f, 1.0f) : make_float3(1.0f, 0.0f, 0.0f);
     t = f3_cross(up, n);
@@ -359,18 +427,119 @@ extern "C" __global__ void __raygen__shade() {
 
     const float3 P = f3_add(ps.origin, f3_scale(ps.direction, hr.t));
 
-    // Metallic mirror reflection (no GGX, no MIS, no RR).
-    // Keep a simple threshold so validation is obvious.
+    // Metallic GGX microfacet specular (no MIS, no RR).
+    // Uses NDF sampling of the half-vector H.
     if (metallic > 0.5f) {
-        float3 R = f3_reflect(ps.direction, n);
-        R = f3_normalize(R);
+        // Roughness -> alpha mapping (with safety clamp).
+        const float r = fminf(fmaxf(roughness, 0.02f), 1.0f);
+        const float alpha = r * r;
+        constexpr float kEps = 1e-6f;
+
+        // V points from surface toward the previous vertex (camera/last bounce).
+        const float3 V = f3_normalize(f3_neg(ps.direction));
+        const float cosNV_raw = f3_dot(n, V);
+        if (cosNV_raw <= 0.0f) {
+            // Should be rare due to Ng facing fixup; fall back to perfect reflection.
+            float3 R = f3_reflect(ps.direction, n);
+            const float len2r = f3_dot(R, R);
+            if (len2r > 0.0f) {
+                R = f3_scale(R, rsqrtf(len2r));
+            } else {
+                R = n;
+            }
+            ps.origin = f3_add(P, f3_scale(n, 1e-3f));
+            ps.direction = R;
+            ps.depth = ps.depth + 1u;
+            ps.throughput = f3_mul(ps.throughput, baseColor);
+            params.paths[pathId] = ps;
+            const uint32_t outIdx = atomicAdd(reinterpret_cast<unsigned int*>(params.rayQueueOutCounter), 1u);
+            if (outIdx < capacity) {
+                params.rayQueueOut[outIdx] = pathId;
+            }
+            return;
+        }
+
+        uint32_t rng = ps.rng;
+        const float u1 = rng_next01(rng);
+        const float u2 = rng_next01(rng);
+
+        const float3 H = ggx_sample_half_vector(u1, u2, alpha, n);
+        const float cosNH_raw = f3_dot(n, H);
+        if (cosNH_raw <= 0.0f) {
+            // Invalid sample; fall back to perfect reflection.
+            float3 R = f3_reflect(ps.direction, n);
+            const float len2r = f3_dot(R, R);
+            if (len2r > 0.0f) {
+                R = f3_scale(R, rsqrtf(len2r));
+            } else {
+                R = n;
+            }
+            ps.origin = f3_add(P, f3_scale(n, 1e-3f));
+            ps.direction = R;
+            ps.depth = ps.depth + 1u;
+            ps.throughput = f3_mul(ps.throughput, baseColor);
+            ps.rng = rng;
+            params.paths[pathId] = ps;
+            const uint32_t outIdx = atomicAdd(reinterpret_cast<unsigned int*>(params.rayQueueOutCounter), 1u);
+            if (outIdx < capacity) {
+                params.rayQueueOut[outIdx] = pathId;
+            }
+            return;
+        }
+
+        // Reflect about microfacet half-vector. User spec: L = reflect(-V, H)
+        float3 L = f3_reflect(f3_neg(V), H);
+        const float len2l = f3_dot(L, L);
+        if (len2l > 0.0f) {
+            L = f3_scale(L, rsqrtf(len2l));
+        } else {
+            L = n;
+        }
+
+        const float cosNL_raw = f3_dot(n, L);
+        if (cosNL_raw <= 0.0f) {
+            // Invalid reflection direction; fall back to perfect reflection about N.
+            float3 R = f3_reflect(ps.direction, n);
+            const float len2r = f3_dot(R, R);
+            if (len2r > 0.0f) {
+                R = f3_scale(R, rsqrtf(len2r));
+            } else {
+                R = n;
+            }
+            ps.origin = f3_add(P, f3_scale(n, 1e-3f));
+            ps.direction = R;
+            ps.depth = ps.depth + 1u;
+            ps.throughput = f3_mul(ps.throughput, baseColor);
+            ps.rng = rng;
+            params.paths[pathId] = ps;
+            const uint32_t outIdx = atomicAdd(reinterpret_cast<unsigned int*>(params.rayQueueOutCounter), 1u);
+            if (outIdx < capacity) {
+                params.rayQueueOut[outIdx] = pathId;
+            }
+            return;
+        }
+
+        const float cosNV = fmaxf(cosNV_raw, kEps);
+        const float cosNL = fmaxf(cosNL_raw, kEps);
+        const float cosNH = fmaxf(cosNH_raw, kEps);
+        const float cosVH = fmaxf(f3_dot(V, H), 0.0f);
+
+        // Metal: F0 = baseColor (raw).
+        const float3 F = fresnelSchlick(cosVH, baseColor);
+        const float G = smithGGX(cosNL, cosNV, alpha);
+
+        // Throughput update (D cancels): throughput *= (F * G * dot(V,H)) / (cosNV * cosNH)
+        float scale = (G * cosVH) / (cosNV * cosNH);
+        scale = fminf(scale, 50.0f); // anti-firefly clamp
+        if (scale < 0.0f) {
+            scale = 0.0f;
+        }
 
         ps.origin = f3_add(P, f3_scale(n, 1e-3f));
-        ps.direction = R;
+        ps.direction = L;
         ps.depth = ps.depth + 1u;
-        // Mirror uses raw baseColor for tinting the reflection.
-        ps.throughput = f3_mul(ps.throughput, baseColor);
-        ps.rng = ps.rng;
+        ps.throughput = f3_mul(ps.throughput, f3_scale(F, scale));
+        ps.rng = rng;
 
         params.paths[pathId] = ps;
 
