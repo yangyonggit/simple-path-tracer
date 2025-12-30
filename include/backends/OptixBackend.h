@@ -65,6 +65,7 @@ private:
     OptixModule sphere_is_module_ = nullptr;
     OptixPipeline pipeline_ = nullptr;
     OptixProgramGroup raygen_prog_group_ = nullptr;
+    OptixProgramGroup raygen_primary_prog_group_ = nullptr;
     OptixProgramGroup miss_prog_group_ = nullptr;
     OptixProgramGroup hitgroup_prog_group_ = nullptr;
     OptixProgramGroup hitgroup_sphere_prog_group_ = nullptr;
@@ -72,6 +73,7 @@ private:
     // Shader Binding Table
     OptixShaderBindingTable* sbt_ = nullptr;
     CUdeviceptr raygen_record_ = 0;
+    CUdeviceptr raygen_primary_record_ = 0;
     CUdeviceptr miss_record_ = 0;
     CUdeviceptr hitgroup_record_ = 0;
     
@@ -94,6 +96,8 @@ private:
     uint32_t wavefront_capacity_ = 0; // == width*height
     bool wavefront_buffers_logged_ = false;
     int material_count_ = 1;
+    uint32_t frame_index_ = 0;
+    bool gen_primary_validated_ = false;
 
     // Geometry buffers and handles
     CUdeviceptr d_vertices_ = 0;

@@ -259,6 +259,30 @@ bool OptixBackend::createProgramGroups() {
             std::cout << "[OptixBackend] Raygen program group log:\n" << log << std::endl;
         }
     }
+
+    // Wavefront primary init raygen program group (no tracing, no fb writes)
+    {
+        OptixProgramGroupOptions pg_options = {};
+        OptixProgramGroupDesc pg_desc = {};
+        pg_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+        pg_desc.raygen.module = module_;
+        pg_desc.raygen.entryFunctionName = "__raygen__gen_primary";
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixProgramGroupCreate(
+            context_,
+            &pg_desc,
+            1,
+            &pg_options,
+            log,
+            &sizeof_log,
+            &raygen_primary_prog_group_
+        ));
+
+        if (sizeof_log > 1) {
+            std::cout << "[OptixBackend] gen_primary raygen program group log:\n" << log << std::endl;
+        }
+    }
     
     // Miss program group
     {
@@ -355,6 +379,9 @@ bool OptixBackend::createPipeline() {
     // We have two hitgroup program groups (triangles + spheres).
     std::vector<OptixProgramGroup> program_groups;
     program_groups.push_back(raygen_prog_group_);
+    if (raygen_primary_prog_group_ != nullptr) {
+        program_groups.push_back(raygen_primary_prog_group_);
+    }
     program_groups.push_back(miss_prog_group_);
     program_groups.push_back(hitgroup_prog_group_);
     if (hitgroup_sphere_prog_group_ != nullptr) {
@@ -431,6 +458,22 @@ bool OptixBackend::createSBT() {
         
         CUDA_CHECK(cudaMemcpy(
             reinterpret_cast<void*>(raygen_record_),
+            &rg_sbt,
+            raygen_record_size,
+            cudaMemcpyHostToDevice
+        ));
+    }
+
+    // gen_primary raygen record
+    {
+        const size_t raygen_record_size = sizeof(RaygenRecord);
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_primary_record_), raygen_record_size));
+
+        RaygenRecord rg_sbt;
+        OPTIX_CHECK(optixSbtRecordPackHeader(raygen_primary_prog_group_, &rg_sbt));
+
+        CUDA_CHECK(cudaMemcpy(
+            reinterpret_cast<void*>(raygen_primary_record_),
             &rg_sbt,
             raygen_record_size,
             cudaMemcpyHostToDevice
@@ -1058,6 +1101,7 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     launch_params.materials = reinterpret_cast<optix::DeviceMaterial*>(d_materials_);
     launch_params.materialCount = material_count_;
     launch_params.maxDepth = 6;
+    launch_params.frameIndex = frame_index_++;
 
     // Camera: match CPU/Embree camera rays.
     // Device raygen expects: dir = normalize(cam_w + ndc.x*cam_u + ndc.y*cam_v), with ndc in [-1,1] and Y flipped.
@@ -1096,7 +1140,50 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     if (d_shade_queue_counter_ != 0) {
         CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_shade_queue_counter_), 0, sizeof(uint32_t), stream_));
     }
+
+    // 1) gen_primary: initialize PathState + fill rayQueueIn. Does NOT change framebuffer.
+    {
+        // Copy launch params to device
+        CUDA_CHECK(cudaMemcpy(
+            reinterpret_cast<void*>(d_launch_params_),
+            &launch_params,
+            sizeof(optix::LaunchParams),
+            cudaMemcpyHostToDevice
+        ));
+
+        // Switch raygen record
+        sbt_->raygenRecord = raygen_primary_record_;
+
+        OPTIX_CHECK(optixLaunch(
+            pipeline_,
+            stream_,
+            d_launch_params_,
+            sizeof(optix::LaunchParams),
+            sbt_,
+            width,
+            height,
+            1
+        ));
+
+        // Validate queue count once (first frame)
+        if (!gen_primary_validated_ && launch_params.frameIndex == 0u) {
+            CUDA_CHECK(cudaStreamSynchronize(stream_));
+            uint32_t queued = 0u;
+            CUDA_CHECK(cudaMemcpy(
+                &queued,
+                reinterpret_cast<void*>(d_ray_queue_counter_),
+                sizeof(uint32_t),
+                cudaMemcpyDeviceToHost
+            ));
+            std::cout << "[Wavefront] gen_primary queued paths: " << queued
+                      << " (expected " << (static_cast<uint32_t>(width) * static_cast<uint32_t>(height)) << ")" << std::endl;
+            gen_primary_validated_ = true;
+        }
+    }
     
+    // 2) Original raygen: renders debug color / geom coloring into framebuffer (must remain unchanged)
+    sbt_->raygenRecord = raygen_record_;
+
     // Copy launch params to device
     CUDA_CHECK(cudaMemcpy(
         reinterpret_cast<void*>(d_launch_params_),
@@ -1147,6 +1234,10 @@ void OptixBackend::destroy() {
     if (raygen_record_ != 0) {
         cudaFree(reinterpret_cast<void*>(raygen_record_));
         raygen_record_ = 0;
+    }
+    if (raygen_primary_record_ != 0) {
+        cudaFree(reinterpret_cast<void*>(raygen_primary_record_));
+        raygen_primary_record_ = 0;
     }
     if (miss_record_ != 0) {
         cudaFree(reinterpret_cast<void*>(miss_record_));
@@ -1246,6 +1337,10 @@ void OptixBackend::destroy() {
     if (raygen_prog_group_ != nullptr) {
         optixProgramGroupDestroy(raygen_prog_group_);
         raygen_prog_group_ = nullptr;
+    }
+    if (raygen_primary_prog_group_ != nullptr) {
+        optixProgramGroupDestroy(raygen_primary_prog_group_);
+        raygen_primary_prog_group_ = nullptr;
     }
     if (miss_prog_group_ != nullptr) {
         optixProgramGroupDestroy(miss_prog_group_);

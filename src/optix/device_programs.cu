@@ -51,6 +51,68 @@ static __forceinline__ __device__ float3 f3_normalize(const float3 v) {
     return make_float3(v.x * inv_len, v.y * inv_len, v.z * inv_len);
 }
 
+static __forceinline__ __device__ uint32_t wang_hash(uint32_t a) {
+    a = (a ^ 61u) ^ (a >> 16);
+    a *= 9u;
+    a = a ^ (a >> 4);
+    a *= 0x27d4eb2du;
+    a = a ^ (a >> 15);
+    return a;
+}
+
+static __forceinline__ __device__ void computePrimaryRay(
+    const unsigned int x,
+    const unsigned int y,
+    float3& origin,
+    float3& direction)
+{
+    const float2 pixel = make_float2(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
+    const float2 ndc = make_float2(
+        (pixel.x / static_cast<float>(params.image_width)) * 2.0f - 1.0f,
+        1.0f - (pixel.y / static_cast<float>(params.image_height)) * 2.0f);
+
+    origin = params.cam_pos;
+    const float3 dir = f3_add(f3_add(f3_scale(params.cam_u, ndc.x), f3_scale(params.cam_v, ndc.y)), params.cam_w);
+    direction = f3_normalize(dir);
+}
+
+// ========================================
+// Wavefront Primary Initialization Raygen
+// ========================================
+extern "C" __global__ void __raygen__gen_primary() {
+    const uint3 idx = optixGetLaunchIndex();
+    const unsigned int x = idx.x;
+    const unsigned int y = idx.y;
+
+    const unsigned int w = params.image_width;
+    const unsigned int h = params.image_height;
+    if (x >= w || y >= h) {
+        return;
+    }
+
+    const uint32_t pixel = static_cast<uint32_t>(y * w + x);
+
+    // Initialize path state for this pixel
+    PathState& ps = params.paths[pixel];
+    ps.pixelIndex = pixel;
+    ps.depth = 0u;
+    ps.rng = wang_hash((pixel + 1u) ^ (params.frameIndex * 9781u + 1u));
+
+    float3 origin;
+    float3 direction;
+    computePrimaryRay(x, y, origin, direction);
+
+    ps.origin = origin;
+    ps.direction = direction;
+    ps.throughput = make_float3(1.0f, 1.0f, 1.0f);
+    ps.radiance = make_float3(0.0f, 0.0f, 0.0f);
+    ps.alive = 1u;
+
+    // Push into ray queue
+    const uint32_t qidx = atomicAdd(params.rayQueueCounter, 1u);
+    params.rayQueueIn[qidx] = pixel;
+}
+
 // ========================================
 // Ray Generation Program
 // ========================================
@@ -61,15 +123,9 @@ extern "C" __global__ void __raygen__rg() {
     const unsigned int x = idx.x;
     const unsigned int y = idx.y;
 
-    // Simple pinhole camera ray
-    const float2 pixel = make_float2(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
-    const float2 ndc = make_float2(
-        (pixel.x / static_cast<float>(params.image_width)) * 2.0f - 1.0f,
-        1.0f - (pixel.y / params.image_height) * 2.0f);
-
-    float3 origin = params.cam_pos;
-    const float3 dir = f3_add(f3_add(f3_scale(params.cam_u, ndc.x), f3_scale(params.cam_v, ndc.y)), params.cam_w);
-    float3 direction = f3_normalize(dir);
+    float3 origin;
+    float3 direction;
+    computePrimaryRay(x, y, origin, direction);
 
     unsigned int p0 = 0u;
     unsigned int p1 = 0u;

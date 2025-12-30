@@ -72,6 +72,9 @@ struct LaunchParams {
     DeviceMaterial* materials;
     int materialCount;
     int maxDepth;
+
+    // Frame index (for deterministic RNG seeding in wavefront prep passes)
+    unsigned int frameIndex;
 };
 
 } // namespace optix
