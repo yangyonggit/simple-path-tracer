@@ -60,6 +60,17 @@ static __forceinline__ __device__ float3 f3_scale(const float3 a, const float s)
     return make_float3(a.x * s, a.y * s, a.z * s);
 }
 
+static __forceinline__ __device__ float3 f3_mul(const float3 a, const float3 b) {
+    return make_float3(a.x * b.x, a.y * b.y, a.z * b.z);
+}
+
+static __forceinline__ __device__ float3 f3_clamp01(const float3 v) {
+    return make_float3(
+        fminf(fmaxf(v.x, 0.0f), 1.0f),
+        fminf(fmaxf(v.y, 0.0f), 1.0f),
+        fminf(fmaxf(v.z, 0.0f), 1.0f));
+}
+
 static __forceinline__ __device__ float3 f3_normalize(const float3 v) {
     const float len2 = v.x * v.x + v.y * v.y + v.z * v.z;
     const float inv_len = rsqrtf(len2);
@@ -225,6 +236,18 @@ extern "C" __global__ void __raygen__shade() {
         return;
     }
 
+    // Material albedo (Lambertian). Fallback = white.
+    float3 albedo = make_float3(1.0f, 1.0f, 1.0f);
+    if (params.materials != nullptr && params.materialCount > 0) {
+        int mid = hr.materialId;
+        if (mid < 0) mid = 0;
+        if (mid >= params.materialCount) mid = params.materialCount - 1;
+        const DeviceMaterial m = params.materials[mid];
+        albedo = m.baseColor;
+        // Optional safety clamp for debug/validation.
+        albedo = f3_clamp01(albedo);
+    }
+
     // Debug must-kill switch: force a visible accum write on the first frame.
     // Flip to 1 temporarily if you suspect resolve/accum wiring.
     constexpr int kForceFirstFrameAccum = 0;
@@ -299,17 +322,8 @@ extern "C" __global__ void __raygen__shade() {
             n = make_float3(0.0f, 1.0f, 0.0f);
         }
 
-        float3 albedo = make_float3(1.0f, 1.0f, 1.0f);
-        if (params.materials != nullptr && params.materialCount > 0) {
-            int mid = hr.materialId;
-            if (mid < 0) mid = 0;
-            if (mid >= params.materialCount) mid = params.materialCount - 1;
-            const DeviceMaterial m = params.materials[mid];
-            albedo = m.baseColor;
-        }
-
-        const float3 c = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
-        const float3 shaded = make_float3(albedo.x * c.x, albedo.y * c.y, albedo.z * c.z);
+        const float3 nvis = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
+        const float3 shaded = f3_mul(albedo, nvis);
         atomicAdd(&params.accum[pixel].x, shaded.x * ps.throughput.x);
         atomicAdd(&params.accum[pixel].y, shaded.y * ps.throughput.y);
         atomicAdd(&params.accum[pixel].z, shaded.z * ps.throughput.z);
@@ -340,7 +354,8 @@ extern "C" __global__ void __raygen__shade() {
     ps.origin = f3_add(P, f3_scale(n, 1e-3f));
     ps.direction = newDir;
     ps.depth = ps.depth + 1u;
-    ps.throughput = f3_scale(ps.throughput, 0.8f);
+    // Lambertian with cosine-weighted sampling: throughput *= albedo.
+    ps.throughput = f3_mul(ps.throughput, albedo);
     ps.rng = rng;
 
     params.paths[pathId] = ps;
