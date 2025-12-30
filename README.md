@@ -3,7 +3,8 @@
 A lightweight physically-based path tracing renderer with **CPU and GPU backends**, focused on clarity, correctness, and experimentation.
 
 ---
-
+## Features
+![](./images/DefaultScene.png)
 ## Overview
 
 This project implements a Monte Carlo path tracer with two rendering backends:
