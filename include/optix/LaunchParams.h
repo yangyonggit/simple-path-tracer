@@ -6,6 +6,10 @@
 
 namespace optix {
 
+// Material type IDs shared between host/device.
+static constexpr int MATERIAL_TYPE_PBR = 0;
+static constexpr int MATERIAL_TYPE_DIELECTRIC = 1;
+
 // ========================================
 // Wavefront basic data structures (scaffolding)
 // ========================================
@@ -31,9 +35,11 @@ struct DeviceMaterial {
     float3 baseColor;   // linear
     float metallic;
     float roughness;
-    int type;           // 0=diffuse (for now)
+    float ior;          // index of refraction (for dielectrics)
+    int type;           // MATERIAL_TYPE_*
     float3 emission;    // unused for now
     float pad;
+    float pad2;
 };
 
 // ========================================

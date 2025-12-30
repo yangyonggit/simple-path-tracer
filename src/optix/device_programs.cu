@@ -80,6 +80,25 @@ static __forceinline__ __device__ float3 f3_reflect(const float3 v, const float3
     return f3_add(v, f3_scale(n, -2.0f * f3_dot(v, n)));
 }
 
+static __forceinline__ __device__ bool f3_refract(const float3 I, const float3 N, const float eta, float3& T) {
+    // I: incident direction (normalized)
+    // N: surface normal pointing against I (normalized)
+    // eta: etaI / etaT
+    const float cosI = fminf(fmaxf(-f3_dot(N, I), -1.0f), 1.0f);
+    const float sin2T = eta * eta * fmaxf(0.0f, 1.0f - cosI * cosI);
+    if (sin2T > 1.0f) {
+        return false; // total internal reflection
+    }
+    const float cosT = sqrtf(fmaxf(0.0f, 1.0f - sin2T));
+    // T = eta * I + (eta * cosI - cosT) * N
+    T = f3_add(f3_scale(I, eta), f3_scale(N, (eta * cosI - cosT)));
+    const float len2 = f3_dot(T, T);
+    if (len2 > 0.0f) {
+        T = f3_scale(T, rsqrtf(len2));
+    }
+    return true;
+}
+
 static __forceinline__ __device__ float3 f3_normalize(const float3 v) {
     const float len2 = v.x * v.x + v.y * v.y + v.z * v.z;
     const float inv_len = rsqrtf(len2);
@@ -318,6 +337,8 @@ extern "C" __global__ void __raygen__shade() {
     float3 baseColor = make_float3(1.0f, 1.0f, 1.0f);
     float metallic = 0.0f;
     float roughness = 1.0f;
+    float ior = 1.5f;
+    int matType = MATERIAL_TYPE_PBR;
     if (params.materials != nullptr && params.materialCount > 0) {
         int mid = hr.materialId;
         if (mid < 0) mid = 0;
@@ -326,6 +347,8 @@ extern "C" __global__ void __raygen__shade() {
         baseColor = m.baseColor;
         metallic = m.metallic;
         roughness = m.roughness;
+        ior = m.ior;
+        matType = m.type;
         // Optional safety clamp for debug/validation.
         baseColor = f3_clamp01(baseColor);
     }
@@ -416,16 +439,65 @@ extern "C" __global__ void __raygen__shade() {
         return;
     }
 
-    // Spawn next diffuse bounce.
-    float3 n = hr.Ng;
-    const float len2 = n.x * n.x + n.y * n.y + n.z * n.z;
+    // Compute geometric normal (do faceforward here; closesthit keeps true Ng).
+    float3 ng = hr.Ng;
+    const float len2 = ng.x * ng.x + ng.y * ng.y + ng.z * ng.z;
     if (len2 > 0.0f) {
-        n = f3_scale(n, rsqrtf(len2));
+        ng = f3_scale(ng, rsqrtf(len2));
     } else {
-        n = make_float3(0.0f, 1.0f, 0.0f);
+        ng = make_float3(0.0f, 1.0f, 0.0f);
     }
+    const bool entering = (f3_dot(ps.direction, ng) < 0.0f);
+    float3 n = entering ? ng : f3_neg(ng);
 
     const float3 P = f3_add(ps.origin, f3_scale(ps.direction, hr.t));
+
+    // Ideal dielectric (delta BSDF): Fresnel reflection + refraction.
+    if (matType == MATERIAL_TYPE_DIELECTRIC) {
+        uint32_t rng = ps.rng;
+        const float xi = rng_next01(rng);
+
+        // a) eta setup
+        const float etaI = entering ? 1.0f : ior;
+        const float etaT = entering ? ior : 1.0f;
+        const float eta = etaI / etaT;
+
+        // b) cosTheta
+        const float cosI = fminf(fmaxf(-f3_dot(ps.direction, n), -1.0f), 1.0f);
+
+        // c) Fresnel Schlick
+        float R0 = (etaT - etaI) / (etaT + etaI);
+        R0 = R0 * R0;
+        const float m = 1.0f - fminf(fmaxf(cosI, 0.0f), 1.0f);
+        const float Fr = R0 + (1.0f - R0) * (m * m * m * m * m);
+
+        // d) Refraction / TIR
+        float3 refrDir = make_float3(0.0f, 0.0f, 0.0f);
+        const bool canRefract = f3_refract(ps.direction, n, eta, refrDir);
+
+        // e) Choose reflect/refract
+        float3 nextDir;
+        if (!canRefract || xi < Fr) {
+            nextDir = f3_reflect(ps.direction, n);
+        } else {
+            nextDir = refrDir;
+        }
+        nextDir = f3_normalize(nextDir);
+
+        // f) Next ray origin: offset along ray direction
+        ps.origin = f3_add(P, f3_scale(nextDir, 1e-3f));
+        ps.direction = nextDir;
+        ps.depth = ps.depth + 1u;
+        // g) Delta BSDF: no GGX / diffuse; throughput unchanged (or could include Fresnel weight)
+        ps.rng = rng;
+
+        params.paths[pathId] = ps;
+        const uint32_t outIdx = atomicAdd(reinterpret_cast<unsigned int*>(params.rayQueueOutCounter), 1u);
+        if (outIdx < capacity) {
+            params.rayQueueOut[outIdx] = pathId;
+        }
+        return;
+    }
 
     // Metallic GGX microfacet specular (no MIS, no RR).
     // Uses NDF sampling of the half-vector H.
@@ -676,10 +748,6 @@ extern "C" __global__ void __closesthit__ch_wf() {
         Ng = optixTransformNormalFromObjectToWorldSpace(Ng_obj);
         Ng = f3_normalize(Ng);
 
-        if (Ng.x * D.x + Ng.y * D.y + Ng.z * D.z > 0.0f) {
-            Ng = f3_neg(Ng);
-        }
-
         materialId = hg ? hg->materialId : 0;
     } else {
         // Spheres: compute normal from hit point and center.
@@ -691,10 +759,6 @@ extern "C" __global__ void __closesthit__ch_wf() {
 
         Ng = optixTransformNormalFromObjectToWorldSpace(Ng_obj);
         Ng = f3_normalize(Ng);
-        if (Ng.x * D.x + Ng.y * D.y + Ng.z * D.z > 0.0f) {
-            Ng = f3_neg(Ng);
-        }
-
         if (hg && hg->materialIds) {
             materialId = hg->materialIds[primId];
         } else {

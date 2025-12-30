@@ -11,21 +11,28 @@ struct BSDFSample {
     bool valid;
 };
 
+enum class MaterialType : int {
+    PBR = optix::MATERIAL_TYPE_PBR,
+    DIELECTRIC = optix::MATERIAL_TYPE_DIELECTRIC,
+};
+
 struct Material {
     glm::vec3 albedo;       // Base color (diffuse reflectance)
     float metallic;         // Metallic factor [0.0, 1.0]
     float roughness;        // Roughness factor [0.0, 1.0] 
     glm::vec3 emission;     // Emissive color
     float ior;              // Index of refraction (for dielectrics)
+    MaterialType materialType = MaterialType::PBR;
     
     // Constructor with default values
     Material(const glm::vec3& albedo_ = glm::vec3(0.5f, 0.5f, 0.5f),
              float metallic_ = 0.0f,
              float roughness_ = 0.5f,
              const glm::vec3& emission_ = glm::vec3(0.0f, 0.0f, 0.0f),
-             float ior_ = 1.5f)
+                         float ior_ = 1.5f,
+                         MaterialType type_ = MaterialType::PBR)
         : albedo(albedo_), metallic(metallic_), roughness(roughness_), 
-          emission(emission_), ior(ior_) {
+                    emission(emission_), ior(ior_), materialType(type_) {
         // Clamp values to valid ranges
         metallic = glm::clamp(metallic, 0.0f, 1.0f);
         roughness = glm::clamp(roughness, 0.01f, 1.0f); // Avoid zero roughness
@@ -117,12 +124,12 @@ namespace Materials {
     }
     
     inline Material Glass() {
-        return Material(glm::vec3(1.0f, 1.0f, 1.0f), 0.0f, 0.0f, glm::vec3(0.0f), 1.5f);
+        return Material(glm::vec3(1.0f, 1.0f, 1.0f), 0.0f, 0.0f, glm::vec3(0.0f), 1.5f, MaterialType::DIELECTRIC);
     }
     
     // High-quality clear glass with slight blue tint
     inline Material ClearGlass() {
-        return Material(glm::vec3(0.95f, 0.98f, 1.0f), 0.0f, 0.02f, glm::vec3(0.0f), 1.5f);
+        return Material(glm::vec3(0.95f, 0.98f, 1.0f), 0.0f, 0.02f, glm::vec3(0.0f), 1.5f, MaterialType::DIELECTRIC);
     }
     
     // Mixed materials

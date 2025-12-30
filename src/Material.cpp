@@ -241,8 +241,10 @@ optix::DeviceMaterial Material::toDevice() const {
     dm.baseColor = make_float3(bc.x, bc.y, bc.z);
     dm.metallic = metallic;
     dm.roughness = roughness;
-    dm.type = 0;
+    dm.ior = ior;
+    dm.type = static_cast<int>(materialType);
     dm.emission = make_float3(0.0f, 0.0f, 0.0f);
     dm.pad = 0.0f;
+    dm.pad2 = 0.0f;
     return dm;
 }
