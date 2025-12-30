@@ -19,6 +19,13 @@ public:
     
     // Check if cubemap is loaded
     bool isLoaded() const { return m_loaded; }
+
+    // Equirectangular source (for GPU sampling)
+    bool hasEquirectangular() const { return m_equirect_loaded; }
+    int getEquirectWidth() const { return m_equirect_width; }
+    int getEquirectHeight() const { return m_equirect_height; }
+    const float* getEquirectRGBA() const { return m_equirect_rgba.empty() ? nullptr : m_equirect_rgba.data(); }
+    uint64_t getEquirectRevision() const { return m_equirect_revision; }
     
     // Get cubemap dimensions
     int getSize() const { return m_size; }
@@ -32,6 +39,13 @@ private:
     Face m_faces[6]; // +X, -X, +Y, -Y, +Z, -Z
     int m_size;
     bool m_loaded;
+
+    // Retained equirectangular HDR pixels in RGBA float32 (size = w*h*4)
+    bool m_equirect_loaded = false;
+    int m_equirect_width = 0;
+    int m_equirect_height = 0;
+    std::vector<float> m_equirect_rgba;
+    uint64_t m_equirect_revision = 0;
     
     // Helper functions
     glm::vec3 sampleFace(int face, float u, float v) const;

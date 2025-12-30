@@ -1,6 +1,7 @@
 #include "backends/OptixBackend.h"
 #include "optix/LaunchParams.h"
 #include "scene/SceneDesc.h"
+#include "EnvironmentManager.h"
 
 #define NOMINMAX  // Prevent Windows min/max macros from conflicting with std::numeric_limits
 
@@ -116,6 +117,86 @@ using HitgroupRecord = SbtRecord<HitgroupData>;
             std::exit(EXIT_FAILURE);                                           \
         }                                                                      \
     } while (0)
+
+// ========================================
+// Environment texture helpers
+// ========================================
+void OptixBackend::destroyEnvironmentTexture() {
+    if (env_tex_ != 0) {
+        CUDA_CHECK(cudaDestroyTextureObject(static_cast<cudaTextureObject_t>(env_tex_)));
+        env_tex_ = 0;
+    }
+    if (d_env_array_ != nullptr) {
+        CUDA_CHECK(cudaFreeArray(reinterpret_cast<cudaArray_t>(d_env_array_)));
+        d_env_array_ = nullptr;
+    }
+    env_width_ = 0;
+    env_height_ = 0;
+    env_revision_ = 0;
+}
+
+bool OptixBackend::updateEnvironmentTextureIfNeeded() {
+    if (env_ == nullptr || !env_->hasEquirectangularEnvironment()) {
+        if (env_tex_ != 0 || d_env_array_ != nullptr) {
+            destroyEnvironmentTexture();
+        }
+        return true;
+    }
+
+    const int w = env_->getEquirectangularWidth();
+    const int h = env_->getEquirectangularHeight();
+    const float* rgba = env_->getEquirectangularRGBA();
+    const uint64_t rev = env_->getEquirectangularRevision();
+
+    if (rgba == nullptr || w <= 0 || h <= 0) {
+        if (env_tex_ != 0 || d_env_array_ != nullptr) {
+            destroyEnvironmentTexture();
+        }
+        return true;
+    }
+
+    if (env_tex_ != 0 && d_env_array_ != nullptr && w == env_width_ && h == env_height_ && rev == env_revision_) {
+        return true;
+    }
+
+    destroyEnvironmentTexture();
+
+    cudaChannelFormatDesc channel_desc = cudaCreateChannelDesc<float4>();
+    cudaArray_t arr = nullptr;
+    CUDA_CHECK(cudaMallocArray(&arr, &channel_desc, static_cast<size_t>(w), static_cast<size_t>(h)));
+
+    const size_t row_bytes = static_cast<size_t>(w) * 4u * sizeof(float);
+    CUDA_CHECK(cudaMemcpy2DToArray(
+        arr,
+        0,
+        0,
+        rgba,
+        row_bytes,
+        row_bytes,
+        static_cast<size_t>(h),
+        cudaMemcpyHostToDevice));
+
+    cudaResourceDesc res_desc = {};
+    res_desc.resType = cudaResourceTypeArray;
+    res_desc.res.array.array = arr;
+
+    cudaTextureDesc tex_desc = {};
+    tex_desc.addressMode[0] = cudaAddressModeWrap;   // U wraps
+    tex_desc.addressMode[1] = cudaAddressModeClamp;  // V clamps
+    tex_desc.filterMode = cudaFilterModeLinear;
+    tex_desc.readMode = cudaReadModeElementType;
+    tex_desc.normalizedCoords = 1;
+
+    cudaTextureObject_t tex = 0;
+    CUDA_CHECK(cudaCreateTextureObject(&tex, &res_desc, &tex_desc, nullptr));
+
+    d_env_array_ = reinterpret_cast<void*>(arr);
+    env_tex_ = static_cast<uint64_t>(tex);
+    env_width_ = w;
+    env_height_ = h;
+    env_revision_ = rev;
+    return true;
+}
 
 // ========================================
 // Constructor / Destructor
@@ -1435,6 +1516,9 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     if (resized || camera_changed) {
         frame_index_ = 0;
     }
+
+    // Ensure environment texture is up-to-date (if an HDR equirect is loaded).
+    updateEnvironmentTextureIfNeeded();
     
     // Setup launch parameters
     optix::LaunchParams launch_params;
@@ -1444,6 +1528,12 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     launch_params.image_height = height;
     launch_params.topHandle = ias_handle_;
     launch_params.debug_mode = debug_mode_;
+
+    // Environment parameters for miss sampling
+    launch_params.env_tex = static_cast<cudaTextureObject_t>(env_tex_);
+    launch_params.env_enabled = (env_tex_ != 0) ? 1 : 0;
+    launch_params.env_intensity = env_ ? env_->getEnvironmentIntensity() : 1.0f;
+    launch_params.env_max_clamp = env_ ? env_->getEnvironmentMaxClamp() : 0.0f;
 
     // Wavefront scaffolding pointers (unused by current device programs)
     launch_params.paths = reinterpret_cast<optix::PathState*>(d_paths_);
@@ -1709,6 +1799,8 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
 // Destroy
 // ========================================
 void OptixBackend::destroy() {
+    destroyEnvironmentTexture();
+
     // Free SBT records
     if (raygen_record_ != 0) {
         cudaFree(reinterpret_cast<void*>(raygen_record_));

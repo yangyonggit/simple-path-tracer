@@ -237,7 +237,48 @@ extern "C" __global__ void __raygen__shade() {
 
     // Termination condition 1: miss MUST contribute immediately.
     if (hr.t < 0.0f) {
-        const float3 c = make_float3(0.1f, 0.1f, 0.1f);
+        float3 dir = ps.direction;
+        dir = f3_normalize(dir);
+
+        float3 c = make_float3(0.1f, 0.1f, 0.1f);
+        if (params.env_enabled && params.env_tex != 0) {
+            // Equirectangular mapping: theta = atan2(z, x), phi = acos(y)
+            constexpr float kInvTwoPi = 0.15915494309189535f; // 1 / (2*pi)
+            constexpr float kInvPi = 0.3183098861837907f;      // 1 / pi
+
+            const float yclamp = fminf(fmaxf(dir.y, -1.0f), 1.0f);
+            const float theta = atan2f(dir.z, dir.x);
+            const float phi = acosf(yclamp);
+            float u = (theta + 3.14159265358979323846f) * kInvTwoPi;
+            float v = phi * kInvPi;
+
+            const float4 t = tex2D<float4>(params.env_tex, u, v);
+            c = make_float3(t.x, t.y, t.z);
+
+            // Match CPU-side EnvironmentManager clamp/exposure behavior.
+            c.x = fminf(c.x, params.env_max_clamp);
+            c.y = fminf(c.y, params.env_max_clamp);
+            c.z = fminf(c.z, params.env_max_clamp);
+            c = f3_scale(c, params.env_intensity);
+        } else {
+            // Procedural sky fallback (matches EnvironmentManager::getSkyColor() shape).
+            float t = 0.5f * (dir.y + 1.0f);
+            // smoothstep(0,1,t)
+            t = fminf(fmaxf(t, 0.0f), 1.0f);
+            t = t * t * (3.0f - 2.0f * t);
+
+            const float3 horizon = make_float3(0.7f, 0.8f, 0.9f);
+            const float3 zenith = make_float3(0.2f, 0.4f, 0.8f);
+            c = f3_add(f3_scale(horizon, 1.0f - t), f3_scale(zenith, t));
+
+            const float3 sun_dir = f3_normalize(make_float3(0.3f, 0.6f, -0.8f));
+            const float sun_dot = fmaxf(dir.x * sun_dir.x + dir.y * sun_dir.y + dir.z * sun_dir.z, 0.0f);
+            const float sun_intensity = powf(sun_dot, 64.0f);
+            const float sun_glow = powf(sun_dot, 8.0f) * 0.3f;
+            const float3 sun_color = make_float3(1.0f, 0.9f, 0.7f);
+            c = f3_add(c, f3_scale(sun_color, sun_intensity + sun_glow));
+            c = f3_scale(c, 0.8f);
+        }
         atomicAdd(&params.accum[pixel].x, c.x * ps.throughput.x);
         atomicAdd(&params.accum[pixel].y, c.y * ps.throughput.y);
         atomicAdd(&params.accum[pixel].z, c.z * ps.throughput.z);

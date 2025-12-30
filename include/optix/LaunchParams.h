@@ -79,6 +79,12 @@ struct LaunchParams {
 
     // Frame index (for deterministic RNG seeding in wavefront prep passes)
     unsigned int frameIndex;
+
+    // Environment (HDR equirectangular) for miss sampling
+    cudaTextureObject_t env_tex;
+    int env_enabled;
+    float env_intensity;
+    float env_max_clamp;
 };
 
 } // namespace optix

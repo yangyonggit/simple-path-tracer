@@ -13,10 +13,10 @@ glm::vec3 EnvironmentManager::getCubemapColor(const glm::vec3& direction) const 
         
         // Much milder tone mapping to preserve cubemap appearance
         // First clamp extreme values only
-        color = glm::min(color, glm::vec3(5.0f)); // More reasonable clamp
+        color = glm::min(color, glm::vec3(m_env_max_clamp)); // More reasonable clamp
         
         // Light exposure adjustment - increase for stronger global lighting
-        color *= 0.8f; // Increased from 0.4f to boost environment lighting
+        color *= m_env_intensity; // Increased from 0.4f to boost environment lighting
         
         // Optional light Reinhard if still too bright
         // color = color / (color + glm::vec3(1.0f));

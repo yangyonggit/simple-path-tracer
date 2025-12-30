@@ -180,6 +180,12 @@ glm::vec3 Cubemap::bilinearSample(const Face& face, float u, float v) const {
 }
 
 bool Cubemap::loadCrossLayout(float* data, int width, int height) {
+    // No equirect source for cross-layout cubemaps.
+    m_equirect_loaded = false;
+    m_equirect_width = 0;
+    m_equirect_height = 0;
+    m_equirect_rgba.clear();
+
     // Cross layout:
     //     [+Y]
     // [+X][+Z][-X][-Z]  
@@ -244,6 +250,24 @@ bool Cubemap::loadCrossLayout(float* data, int width, int height) {
 }
 
 bool Cubemap::loadEquirectangular(float* data, int width, int height) {
+    // Retain the original equirectangular pixels for GPU sampling.
+    // stb_image loads RGB float32 (3 channels) due to stbi_loadf(..., 3).
+    m_equirect_loaded = true;
+    m_equirect_width = width;
+    m_equirect_height = height;
+    m_equirect_rgba.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            const int srcIdx = (y * width + x) * 3;
+            const size_t dstIdx = (static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x)) * 4u;
+            m_equirect_rgba[dstIdx + 0] = data[srcIdx + 0];
+            m_equirect_rgba[dstIdx + 1] = data[srcIdx + 1];
+            m_equirect_rgba[dstIdx + 2] = data[srcIdx + 2];
+            m_equirect_rgba[dstIdx + 3] = 1.0f;
+        }
+    }
+    m_equirect_revision++;
+
     // Convert equirectangular to cubemap faces
     m_size = 512; // Fixed size for generated cube faces
     

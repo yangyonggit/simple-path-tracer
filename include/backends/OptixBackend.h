@@ -27,6 +27,7 @@ namespace scene {
 }
 
 class Camera;
+class EnvironmentManager;
 
 namespace backends {
 
@@ -46,6 +47,10 @@ public:
     // pixels: output buffer (width * height * 3 RGB bytes)
     // width, height: image dimensions
     void render(unsigned char* pixels, int width, int height, const Camera& camera);
+
+    // Provide access to environment data (equirectangular HDR) for GPU sampling.
+    // Pointer must remain valid for the duration of rendering.
+    void setEnvironment(const EnvironmentManager* env) { env_ = env; }
     
     // Release all OptiX resources
     void destroy();
@@ -146,6 +151,14 @@ private:
 
     // Debug mode for device shading (host-controlled)
     int debug_mode_ = 0;          // 0=normal, 1=hit/miss
+
+    // Environment map (CUDA texture object) for GPU miss sampling
+    const EnvironmentManager* env_ = nullptr;
+    void* d_env_array_ = nullptr; // cudaArray_t (kept opaque in header)
+    uint64_t env_tex_ = 0;        // cudaTextureObject_t
+    int env_width_ = 0;
+    int env_height_ = 0;
+    uint64_t env_revision_ = 0;
     
     // PTX code
     std::string ptx_code_;
@@ -161,6 +174,9 @@ private:
     bool buildIAS(const scene::SceneDesc& sceneDesc);
     void allocateOutputBuffer(int width, int height);
     void allocateWavefrontBuffers(int width, int height);
+
+    bool updateEnvironmentTextureIfNeeded();
+    void destroyEnvironmentTexture();
     
     // Logging callback
     static void contextLogCallback(unsigned int level, const char* tag, 
