@@ -112,9 +112,12 @@ extern "C" __global__ void __raygen__gen_primary() {
     ps.radiance = make_float3(0.0f, 0.0f, 0.0f);
     ps.alive = 1u;
 
-    // Push into ray queue
+    // Push into ray queue (defensive bounds check)
+    const uint32_t capacity = static_cast<uint32_t>(params.image_width) * static_cast<uint32_t>(params.image_height);
     const uint32_t qidx = atomicAdd(params.rayQueueCounter, 1u);
-    params.rayQueueIn[qidx] = pixel;
+    if (qidx < capacity) {
+        params.rayQueueIn[qidx] = pixel;
+    }
 }
 
 // ========================================
@@ -122,7 +125,11 @@ extern "C" __global__ void __raygen__gen_primary() {
 // ========================================
 extern "C" __global__ void __raygen__trace() {
     const uint32_t tid = optixGetLaunchIndex().x;
-    const uint32_t count = *params.rayQueueCounter;
+    uint32_t count = *params.rayQueueCounter;
+    const uint32_t capacity = static_cast<uint32_t>(params.image_width) * static_cast<uint32_t>(params.image_height);
+    if (count > capacity) {
+        count = capacity;
+    }
     if (tid >= count) {
         return;
     }
@@ -147,6 +154,47 @@ extern "C" __global__ void __raygen__trace() {
         2,  // sbtStride = rayTypeCount
         1,  // missSBTIndex = rayType
         p0, p1);
+}
+
+// ========================================
+// Wavefront Shade Raygen
+// ========================================
+extern "C" __global__ void __raygen__shade() {
+    const uint32_t tid = optixGetLaunchIndex().x;
+    uint32_t count = *params.shadeQueueCounter;
+    const uint32_t capacity = static_cast<uint32_t>(params.image_width) * static_cast<uint32_t>(params.image_height);
+    if (count > capacity) {
+        count = capacity;
+    }
+    if (tid >= count) {
+        return;
+    }
+
+    const uint32_t pathId = params.shadeQueue[tid];
+    const PathState ps = params.paths[pathId];
+    const HitRecord hr = params.hitRecords[pathId];
+
+    float3 c;
+    if (hr.t < 0.0f) {
+        c = make_float3(0.1f, 0.1f, 0.1f);
+    } else {
+        float3 n = hr.Ng;
+        const float len2 = n.x * n.x + n.y * n.y + n.z * n.z;
+        if (len2 > 0.0f) {
+            n = f3_scale(n, rsqrtf(len2));
+        } else {
+            n = make_float3(0.0f, 1.0f, 0.0f);
+        }
+        c = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
+    }
+
+    const uint32_t pixel = ps.pixelIndex;
+    if (pixel >= capacity) {
+        return;
+    }
+
+    const float4 old = params.accum[pixel];
+    params.accum[pixel] = make_float4(old.x + c.x, old.y + c.y, old.z + c.z, old.w + 1.0f);
 }
 
 // ========================================

@@ -67,6 +67,7 @@ private:
     OptixProgramGroup raygen_prog_group_ = nullptr;
     OptixProgramGroup raygen_primary_prog_group_ = nullptr;
     OptixProgramGroup raygen_trace_prog_group_ = nullptr;
+    OptixProgramGroup raygen_shade_prog_group_ = nullptr;
     OptixProgramGroup miss_prog_group_ = nullptr;
     OptixProgramGroup miss_wf_prog_group_ = nullptr;
     OptixProgramGroup hitgroup_prog_group_ = nullptr;
@@ -79,6 +80,7 @@ private:
     CUdeviceptr raygen_record_ = 0;
     CUdeviceptr raygen_primary_record_ = 0;
     CUdeviceptr raygen_trace_record_ = 0;
+    CUdeviceptr raygen_shade_record_ = 0;
     CUdeviceptr miss_record_ = 0;
     CUdeviceptr hitgroup_record_ = 0;
     
@@ -92,6 +94,7 @@ private:
     // Wavefront scaffolding buffers (lifetime managed by OptixBackend)
     CUdeviceptr d_paths_ = 0;
     CUdeviceptr d_hit_records_ = 0;
+    CUdeviceptr d_accum_ = 0;
     CUdeviceptr d_ray_queue_in_ = 0;
     CUdeviceptr d_ray_queue_out_ = 0;
     CUdeviceptr d_shade_queue_ = 0;

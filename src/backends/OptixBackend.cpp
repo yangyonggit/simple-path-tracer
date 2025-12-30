@@ -307,6 +307,30 @@ bool OptixBackend::createProgramGroups() {
             std::cout << "[OptixBackend] trace raygen program group log:\n" << log << std::endl;
         }
     }
+
+    // Wavefront shade raygen program group
+    {
+        OptixProgramGroupOptions pg_options = {};
+        OptixProgramGroupDesc pg_desc = {};
+        pg_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+        pg_desc.raygen.module = module_;
+        pg_desc.raygen.entryFunctionName = "__raygen__shade";
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixProgramGroupCreate(
+            context_,
+            &pg_desc,
+            1,
+            &pg_options,
+            log,
+            &sizeof_log,
+            &raygen_shade_prog_group_
+        ));
+
+        if (sizeof_log > 1) {
+            std::cout << "[OptixBackend] shade raygen program group log:\n" << log << std::endl;
+        }
+    }
     
     // Miss program group
     {
@@ -489,6 +513,9 @@ bool OptixBackend::createPipeline() {
     if (raygen_trace_prog_group_ != nullptr) {
         program_groups.push_back(raygen_trace_prog_group_);
     }
+    if (raygen_shade_prog_group_ != nullptr) {
+        program_groups.push_back(raygen_shade_prog_group_);
+    }
     program_groups.push_back(miss_prog_group_);
     if (miss_wf_prog_group_ != nullptr) {
         program_groups.push_back(miss_wf_prog_group_);
@@ -606,6 +633,22 @@ bool OptixBackend::createSBT() {
 
         CUDA_CHECK(cudaMemcpy(
             reinterpret_cast<void*>(raygen_trace_record_),
+            &rg_sbt,
+            raygen_record_size,
+            cudaMemcpyHostToDevice
+        ));
+    }
+
+    // shade raygen record
+    {
+        const size_t raygen_record_size = sizeof(RaygenRecord);
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_shade_record_), raygen_record_size));
+
+        RaygenRecord rg_sbt;
+        OPTIX_CHECK(optixSbtRecordPackHeader(raygen_shade_prog_group_, &rg_sbt));
+
+        CUDA_CHECK(cudaMemcpy(
+            reinterpret_cast<void*>(raygen_shade_record_),
             &rg_sbt,
             raygen_record_size,
             cudaMemcpyHostToDevice
@@ -1147,6 +1190,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
 
     if (wavefront_capacity_ == capacity &&
         d_paths_ != 0 && d_hit_records_ != 0 &&
+        d_accum_ != 0 &&
         d_ray_queue_in_ != 0 && d_ray_queue_out_ != 0 && d_shade_queue_ != 0 &&
         d_ray_queue_counter_ != 0 && d_shade_queue_counter_ != 0 &&
         d_materials_ != 0) {
@@ -1162,6 +1206,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
 
     freeIf(d_paths_);
     freeIf(d_hit_records_);
+    freeIf(d_accum_);
     freeIf(d_ray_queue_in_);
     freeIf(d_ray_queue_out_);
     freeIf(d_shade_queue_);
@@ -1171,12 +1216,14 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
 
     const size_t paths_bytes = sizeof(optix::PathState) * static_cast<size_t>(capacity);
     const size_t hit_bytes = sizeof(optix::HitRecord) * static_cast<size_t>(capacity);
+    const size_t accum_bytes = sizeof(float4) * static_cast<size_t>(capacity);
     const size_t queue_bytes = sizeof(uint32_t) * static_cast<size_t>(capacity);
     const size_t counter_bytes = sizeof(uint32_t);
     const size_t materials_bytes = sizeof(optix::DeviceMaterial) * static_cast<size_t>(material_count_);
 
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_paths_), paths_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_hit_records_), hit_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_accum_), accum_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_in_), queue_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_out_), queue_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_shade_queue_), queue_bytes));
@@ -1206,6 +1253,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
         std::cout << "[OptixBackend] Wavefront buffers allocated (scaffolding):" << std::endl;
         std::cout << "  paths: " << paths_bytes << " bytes" << std::endl;
         std::cout << "  hitRecords: " << hit_bytes << " bytes" << std::endl;
+        std::cout << "  accum: " << accum_bytes << " bytes" << std::endl;
         std::cout << "  rayQueueIn: " << queue_bytes << " bytes" << std::endl;
         std::cout << "  rayQueueOut: " << queue_bytes << " bytes" << std::endl;
         std::cout << "  shadeQueue: " << queue_bytes << " bytes" << std::endl;
@@ -1223,11 +1271,14 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     allocateOutputBuffer(width, height);
 
     // Allocate wavefront scaffolding buffers on first use / resize
+    const uint32_t prev_wavefront_capacity = wavefront_capacity_;
     allocateWavefrontBuffers(width, height);
+    const bool resized = (prev_wavefront_capacity != wavefront_capacity_);
     
     // Setup launch parameters
     optix::LaunchParams launch_params;
     launch_params.output_buffer = reinterpret_cast<uchar4*>(d_output_buffer_);
+    launch_params.accum = reinterpret_cast<float4*>(d_accum_);
     launch_params.image_width = width;
     launch_params.image_height = height;
     launch_params.topHandle = ias_handle_;
@@ -1245,6 +1296,11 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     launch_params.materialCount = material_count_;
     launch_params.maxDepth = 6;
     launch_params.frameIndex = frame_index_++;
+
+    if ((launch_params.frameIndex == 0u || resized) && d_accum_ != 0) {
+        const size_t accum_bytes = sizeof(float4) * static_cast<size_t>(width) * static_cast<size_t>(height);
+        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_accum_), 0, accum_bytes, stream_));
+    }
 
     // Camera: match CPU/Embree camera rays.
     // Device raygen expects: dir = normalize(cam_w + ndc.x*cam_u + ndc.y*cam_v), with ndc in [-1,1] and Y flipped.
@@ -1287,7 +1343,7 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     const uint32_t capacity = static_cast<uint32_t>(width) * static_cast<uint32_t>(height);
 
     // 1) gen_primary: initialize PathState + fill rayQueueIn. Does NOT change framebuffer.
-    uint32_t ray_queue_count = capacity;
+    uint32_t ray_queue_count = 0u;
     {
         // Copy launch params to device
         CUDA_CHECK(cudaMemcpy(
@@ -1310,20 +1366,19 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
             height,
             1
         ));
+    }
 
-        // Read queue count once (first frame)
-        if (!gen_primary_validated_ && launch_params.frameIndex == 0u) {
-            CUDA_CHECK(cudaStreamSynchronize(stream_));
-            CUDA_CHECK(cudaMemcpy(
-                &ray_queue_count,
-                reinterpret_cast<void*>(d_ray_queue_counter_),
-                sizeof(uint32_t),
-                cudaMemcpyDeviceToHost
-            ));
-            std::cout << "[Wavefront] rayQueueCount = " << ray_queue_count
-                      << " (expected " << (static_cast<uint32_t>(width) * static_cast<uint32_t>(height)) << ")" << std::endl;
-            gen_primary_validated_ = true;
-        }
+    // Read the true queued ray count every frame (for trace launch dimension).
+    CUDA_CHECK(cudaMemcpyAsync(
+        &ray_queue_count,
+        reinterpret_cast<void*>(d_ray_queue_counter_),
+        sizeof(uint32_t),
+        cudaMemcpyDeviceToHost,
+        stream_
+    ));
+    CUDA_CHECK(cudaStreamSynchronize(stream_));
+    if (ray_queue_count > capacity) {
+        ray_queue_count = capacity;
     }
 
     // 2) trace: consume rayQueueIn[0..N) and write hitRecords + shadeQueue (no fb writes)
@@ -1351,23 +1406,57 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
                 1,
                 1
             ));
-
-            if (launch_params.frameIndex == 0u) {
-                CUDA_CHECK(cudaStreamSynchronize(stream_));
-                uint32_t shade_count = 0u;
-                CUDA_CHECK(cudaMemcpy(
-                    &shade_count,
-                    reinterpret_cast<void*>(d_shade_queue_counter_),
-                    sizeof(uint32_t),
-                    cudaMemcpyDeviceToHost
-                ));
-                std::cout << "[Wavefront] shadeQueueCount after trace = " << shade_count
-                          << " (expected " << ray_queue_count << ")" << std::endl;
-            }
         }
     }
+
+    // Read shade queue count every frame (for shade launch dimension).
+    uint32_t shade_queue_count = 0u;
+    CUDA_CHECK(cudaMemcpyAsync(
+        &shade_queue_count,
+        reinterpret_cast<void*>(d_shade_queue_counter_),
+        sizeof(uint32_t),
+        cudaMemcpyDeviceToHost,
+        stream_
+    ));
+    CUDA_CHECK(cudaStreamSynchronize(stream_));
+    if (shade_queue_count > capacity) {
+        shade_queue_count = capacity;
+    }
+
+    // 3) shade: consume shadeQueue[0..M) and write accum (no fb writes)
+    {
+        if (shade_queue_count > 0u) {
+            CUDA_CHECK(cudaMemcpy(
+                reinterpret_cast<void*>(d_launch_params_),
+                &launch_params,
+                sizeof(optix::LaunchParams),
+                cudaMemcpyHostToDevice
+            ));
+
+            sbt_->raygenRecord = raygen_shade_record_;
+            OPTIX_CHECK(optixLaunch(
+                pipeline_,
+                stream_,
+                d_launch_params_,
+                sizeof(optix::LaunchParams),
+                sbt_,
+                shade_queue_count,
+                1,
+                1
+            ));
+        }
+    }
+
+    // Frame-0 validation logs (must print once)
+    if (launch_params.frameIndex == 0u) {
+        std::cout << "[Wavefront] rayQueueCount = " << ray_queue_count
+                  << " (expect " << capacity << ")" << std::endl;
+        std::cout << "[Wavefront] shadeQueueCount = " << shade_queue_count
+                  << " (expect " << ray_queue_count << ")" << std::endl;
+        std::cout << "[Wavefront] shadeLaunchCount = " << shade_queue_count << std::endl;
+    }
     
-    // 3) Original raygen: renders debug color / geom coloring into framebuffer (must remain unchanged)
+    // 4) Original raygen: renders debug color / geom coloring into framebuffer (must remain unchanged)
     sbt_->raygenRecord = raygen_record_;
 
     // Copy launch params to device
@@ -1429,6 +1518,10 @@ void OptixBackend::destroy() {
         cudaFree(reinterpret_cast<void*>(raygen_trace_record_));
         raygen_trace_record_ = 0;
     }
+    if (raygen_shade_record_ != 0) {
+        cudaFree(reinterpret_cast<void*>(raygen_shade_record_));
+        raygen_shade_record_ = 0;
+    }
     if (miss_record_ != 0) {
         cudaFree(reinterpret_cast<void*>(miss_record_));
         miss_record_ = 0;
@@ -1452,6 +1545,10 @@ void OptixBackend::destroy() {
     if (d_hit_records_ != 0) {
         cudaFree(reinterpret_cast<void*>(d_hit_records_));
         d_hit_records_ = 0;
+    }
+    if (d_accum_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_accum_));
+        d_accum_ = 0;
     }
     if (d_ray_queue_in_ != 0) {
         cudaFree(reinterpret_cast<void*>(d_ray_queue_in_));
@@ -1535,6 +1632,10 @@ void OptixBackend::destroy() {
     if (raygen_trace_prog_group_ != nullptr) {
         optixProgramGroupDestroy(raygen_trace_prog_group_);
         raygen_trace_prog_group_ = nullptr;
+    }
+    if (raygen_shade_prog_group_ != nullptr) {
+        optixProgramGroupDestroy(raygen_shade_prog_group_);
+        raygen_shade_prog_group_ = nullptr;
     }
     if (miss_prog_group_ != nullptr) {
         optixProgramGroupDestroy(miss_prog_group_);

@@ -40,6 +40,9 @@ struct DeviceMaterial {
 struct LaunchParams {
     // Output buffer
     uchar4* output_buffer;  // RGBA output (or RGB packed as RGBA)
+
+    // Accumulation buffer (wavefront shading writes here; progressive-friendly)
+    float4* accum;          // size = image_width * image_height
     
     // Image dimensions
     unsigned int image_width;
