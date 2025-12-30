@@ -29,6 +29,7 @@ namespace scene {
 class Camera;
 class EnvironmentManager;
 class MaterialManager;
+class LightManager;
 
 namespace backends {
 
@@ -56,6 +57,10 @@ public:
     // Provide access to CPU materials so we can upload them to the GPU.
     // Pointer must remain valid for the duration of rendering.
     void setMaterialManager(const MaterialManager* mm) { material_manager_ = mm; }
+
+    // Provide access to lights (directional light for now) so GPU direct lighting matches CPU.
+    // Pointer must remain valid for the duration of rendering.
+    void setLightManager(const LightManager* lm) { light_manager_ = lm; }
     
     // Release all OptiX resources
     void destroy();
@@ -161,6 +166,7 @@ private:
     // Environment map (CUDA texture object) for GPU miss sampling
     const EnvironmentManager* env_ = nullptr;
     const MaterialManager* material_manager_ = nullptr;
+    const LightManager* light_manager_ = nullptr;
     void* d_env_array_ = nullptr; // cudaArray_t (kept opaque in header)
     uint64_t env_tex_ = 0;        // cudaTextureObject_t
     int env_width_ = 0;

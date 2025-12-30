@@ -452,6 +452,49 @@ extern "C" __global__ void __raygen__shade() {
 
     const float3 P = f3_add(ps.origin, f3_scale(ps.direction, hr.t));
 
+    // Direct lighting from a single directional light (no shadow ray, no MIS).
+    // Adds contribution to accum without incrementing sample count (w).
+    if (params.hasDirLight) {
+        const float3 V = f3_normalize(f3_neg(ps.direction));
+        float3 L = f3_neg(params.dirLight.direction); // direction TO the light
+        L = f3_normalize(L);
+
+        const float NdotL = fmaxf(f3_dot(n, L), 0.0f);
+        if (NdotL > 0.0f && matType != MATERIAL_TYPE_DIELECTRIC) {
+            float3 f = make_float3(0.0f, 0.0f, 0.0f);
+            constexpr float kPi = 3.14159265358979323846f;
+            constexpr float kEps = 1e-6f;
+
+            if (metallic > 0.5f) {
+                const float r = fminf(fmaxf(roughness, 0.02f), 1.0f);
+                const float alpha = r * r;
+                const float3 H = f3_normalize(f3_add(V, L));
+
+                const float cosNV = fmaxf(f3_dot(n, V), 0.0f);
+                const float cosNL = NdotL;
+                const float cosVH = fmaxf(f3_dot(V, H), 0.0f);
+
+                if (cosNV > 0.0f && cosNL > 0.0f) {
+                    const float D = D_GGX(n, H, alpha);
+                    const float G = smithGGX(cosNL, cosNV, alpha);
+                    const float3 F = fresnelSchlick(cosVH, baseColor); // metal F0 = baseColor
+                    const float denom = fmaxf(4.0f * cosNV * cosNL, kEps);
+                    const float scale = (D * G) / denom;
+                    f = f3_scale(F, scale);
+                }
+            } else {
+                // Lambertian: diffuseColor / pi
+                f = f3_scale(diffuseColor, 1.0f / kPi);
+            }
+
+            const float3 Li = params.dirLight.radiance;
+            const float3 contrib = f3_scale(f3_mul(f3_mul(ps.throughput, f), Li), NdotL);
+            atomicAdd(&params.accum[pixel].x, contrib.x);
+            atomicAdd(&params.accum[pixel].y, contrib.y);
+            atomicAdd(&params.accum[pixel].z, contrib.z);
+        }
+    }
+
     // Ideal dielectric (delta BSDF): Fresnel reflection + refraction.
     if (matType == MATERIAL_TYPE_DIELECTRIC) {
         uint32_t rng = ps.rng;

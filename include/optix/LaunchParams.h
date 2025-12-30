@@ -42,6 +42,13 @@ struct DeviceMaterial {
     float pad2;
 };
 
+struct DirectionalLight {
+    // Normalized direction pointing FROM the light (i.e., direction of light rays).
+    float3 direction;
+    // Radiance = color * intensity.
+    float3 radiance;
+};
+
 // ========================================
 // Launch Parameters - Passed to OptiX kernels
 // ========================================
@@ -93,6 +100,10 @@ struct LaunchParams {
     int env_enabled;
     float env_intensity;
     float env_max_clamp;
+
+    // Single directional light (for direct lighting; no shadows/MIS).
+    DirectionalLight dirLight;
+    int hasDirLight;
 };
 
 } // namespace optix

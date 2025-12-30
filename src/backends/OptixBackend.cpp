@@ -1,4 +1,6 @@
 #include "backends/OptixBackend.h"
+
+#include "Light.h"
 #include "optix/LaunchParams.h"
 #include "scene/SceneDesc.h"
 #include "EnvironmentManager.h"
@@ -1559,6 +1561,29 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     launch_params.env_enabled = (env_tex_ != 0) ? 1 : 0;
     launch_params.env_intensity = env_ ? env_->getEnvironmentIntensity() : 1.0f;
     launch_params.env_max_clamp = env_ ? env_->getEnvironmentMaxClamp() : 0.0f;
+
+    // Directional light (single), sourced from CPU LightManager.
+    launch_params.hasDirLight = 0;
+    launch_params.dirLight.direction = make_float3(0.0f, -1.0f, 0.0f);
+    launch_params.dirLight.radiance = make_float3(0.0f, 0.0f, 0.0f);
+    if (light_manager_ != nullptr) {
+        for (size_t i = 0; i < light_manager_->getLightCount(); ++i) {
+            const Light& l = light_manager_->getLight(i);
+            if (l.getType() != Light::DIRECTIONAL) {
+                continue;
+            }
+            const auto& dl = static_cast<const DirectionalLight&>(l);
+
+            // Light.h stores direction TO the light; LaunchParams expects direction FROM the light.
+            const glm::vec3 dir_from_light = -dl.getDirection();
+            const glm::vec3 rad = dl.getColor() * dl.getIntensity();
+
+            launch_params.dirLight.direction = make_float3(dir_from_light.x, dir_from_light.y, dir_from_light.z);
+            launch_params.dirLight.radiance = make_float3(rad.x, rad.y, rad.z);
+            launch_params.hasDirLight = 1;
+            break;
+        }
+    }
 
     // Wavefront scaffolding pointers (unused by current device programs)
     launch_params.paths = reinterpret_cast<optix::PathState*>(d_paths_);
