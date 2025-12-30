@@ -951,11 +951,93 @@ void OptixBackend::allocateOutputBuffer(int width, int height) {
 }
 
 // ========================================
+// Allocate Wavefront Buffers (Scaffolding)
+// ========================================
+void OptixBackend::allocateWavefrontBuffers(int width, int height) {
+    const uint32_t capacity = static_cast<uint32_t>(width) * static_cast<uint32_t>(height);
+    if (capacity == 0u) {
+        return;
+    }
+
+    if (wavefront_capacity_ == capacity &&
+        d_paths_ != 0 && d_hit_records_ != 0 &&
+        d_ray_queue_in_ != 0 && d_ray_queue_out_ != 0 && d_shade_queue_ != 0 &&
+        d_ray_queue_counter_ != 0 && d_shade_queue_counter_ != 0 &&
+        d_materials_ != 0) {
+        return;
+    }
+
+    auto freeIf = [&](CUdeviceptr& p) {
+        if (p != 0) {
+            CUDA_CHECK(cudaFree(reinterpret_cast<void*>(p)));
+            p = 0;
+        }
+    };
+
+    freeIf(d_paths_);
+    freeIf(d_hit_records_);
+    freeIf(d_ray_queue_in_);
+    freeIf(d_ray_queue_out_);
+    freeIf(d_shade_queue_);
+    freeIf(d_ray_queue_counter_);
+    freeIf(d_shade_queue_counter_);
+    freeIf(d_materials_);
+
+    const size_t paths_bytes = sizeof(optix::PathState) * static_cast<size_t>(capacity);
+    const size_t hit_bytes = sizeof(optix::HitRecord) * static_cast<size_t>(capacity);
+    const size_t queue_bytes = sizeof(uint32_t) * static_cast<size_t>(capacity);
+    const size_t counter_bytes = sizeof(uint32_t);
+    const size_t materials_bytes = sizeof(optix::DeviceMaterial) * static_cast<size_t>(material_count_);
+
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_paths_), paths_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_hit_records_), hit_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_in_), queue_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_out_), queue_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_shade_queue_), queue_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_counter_), counter_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_shade_queue_counter_), counter_bytes));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_materials_), materials_bytes));
+
+    // Upload one default material (scaffolding only; device programs don't use it yet)
+    {
+        optix::DeviceMaterial m{};
+        m.baseColor = make_float3(1.0f, 1.0f, 1.0f);
+        m.roughness = 1.0f;
+        m.metallic = 0.0f;
+        m.type = 0;
+        CUDA_CHECK(cudaMemcpy(
+            reinterpret_cast<void*>(d_materials_),
+            &m,
+            sizeof(optix::DeviceMaterial),
+            cudaMemcpyHostToDevice
+        ));
+    }
+
+    wavefront_capacity_ = capacity;
+
+    if (!wavefront_buffers_logged_) {
+        wavefront_buffers_logged_ = true;
+        std::cout << "[OptixBackend] Wavefront buffers allocated (scaffolding):" << std::endl;
+        std::cout << "  paths: " << paths_bytes << " bytes" << std::endl;
+        std::cout << "  hitRecords: " << hit_bytes << " bytes" << std::endl;
+        std::cout << "  rayQueueIn: " << queue_bytes << " bytes" << std::endl;
+        std::cout << "  rayQueueOut: " << queue_bytes << " bytes" << std::endl;
+        std::cout << "  shadeQueue: " << queue_bytes << " bytes" << std::endl;
+        std::cout << "  rayQueueCounter: " << counter_bytes << " bytes" << std::endl;
+        std::cout << "  shadeQueueCounter: " << counter_bytes << " bytes" << std::endl;
+        std::cout << "  materials: " << materials_bytes << " bytes (count=" << material_count_ << ")" << std::endl;
+    }
+}
+
+// ========================================
 // Render
 // ========================================
 void OptixBackend::render(unsigned char* pixels, int width, int height, const Camera& camera) {
     // Allocate output buffer on device
     allocateOutputBuffer(width, height);
+
+    // Allocate wavefront scaffolding buffers on first use / resize
+    allocateWavefrontBuffers(width, height);
     
     // Setup launch parameters
     optix::LaunchParams launch_params;
@@ -964,6 +1046,18 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     launch_params.image_height = height;
     launch_params.topHandle = ias_handle_;
     launch_params.debug_mode = debug_mode_;
+
+    // Wavefront scaffolding pointers (unused by current device programs)
+    launch_params.paths = reinterpret_cast<optix::PathState*>(d_paths_);
+    launch_params.hitRecords = reinterpret_cast<optix::HitRecord*>(d_hit_records_);
+    launch_params.rayQueueIn = reinterpret_cast<uint32_t*>(d_ray_queue_in_);
+    launch_params.rayQueueOut = reinterpret_cast<uint32_t*>(d_ray_queue_out_);
+    launch_params.shadeQueue = reinterpret_cast<uint32_t*>(d_shade_queue_);
+    launch_params.rayQueueCounter = reinterpret_cast<uint32_t*>(d_ray_queue_counter_);
+    launch_params.shadeQueueCounter = reinterpret_cast<uint32_t*>(d_shade_queue_counter_);
+    launch_params.materials = reinterpret_cast<optix::DeviceMaterial*>(d_materials_);
+    launch_params.materialCount = material_count_;
+    launch_params.maxDepth = 6;
 
     // Camera: match CPU/Embree camera rays.
     // Device raygen expects: dir = normalize(cam_w + ndc.x*cam_u + ndc.y*cam_v), with ndc in [-1,1] and Y flipped.
@@ -993,6 +1087,14 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     // Allocate launch params on device if not already allocated
     if (d_launch_params_ == 0) {
         CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_launch_params_), sizeof(optix::LaunchParams)));
+    }
+
+    // Per-frame: reset wavefront counters (required by scaffolding)
+    if (d_ray_queue_counter_ != 0) {
+        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_ray_queue_counter_), 0, sizeof(uint32_t), stream_));
+    }
+    if (d_shade_queue_counter_ != 0) {
+        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_shade_queue_counter_), 0, sizeof(uint32_t), stream_));
     }
     
     // Copy launch params to device
@@ -1060,6 +1162,41 @@ void OptixBackend::destroy() {
         cudaFree(reinterpret_cast<void*>(d_output_buffer_));
         d_output_buffer_ = 0;
     }
+
+    // Free wavefront scaffolding buffers
+    if (d_paths_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_paths_));
+        d_paths_ = 0;
+    }
+    if (d_hit_records_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_hit_records_));
+        d_hit_records_ = 0;
+    }
+    if (d_ray_queue_in_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_ray_queue_in_));
+        d_ray_queue_in_ = 0;
+    }
+    if (d_ray_queue_out_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_ray_queue_out_));
+        d_ray_queue_out_ = 0;
+    }
+    if (d_shade_queue_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_shade_queue_));
+        d_shade_queue_ = 0;
+    }
+    if (d_ray_queue_counter_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_ray_queue_counter_));
+        d_ray_queue_counter_ = 0;
+    }
+    if (d_shade_queue_counter_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_shade_queue_counter_));
+        d_shade_queue_counter_ = 0;
+    }
+    if (d_materials_ != 0) {
+        cudaFree(reinterpret_cast<void*>(d_materials_));
+        d_materials_ = 0;
+    }
+    wavefront_capacity_ = 0;
 
     // Free geometry buffers
     if (d_vertices_ != 0) {

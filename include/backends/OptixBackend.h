@@ -82,6 +82,19 @@ private:
     // Launch parameters buffer on device
     CUdeviceptr d_launch_params_ = 0;
 
+    // Wavefront scaffolding buffers (lifetime managed by OptixBackend)
+    CUdeviceptr d_paths_ = 0;
+    CUdeviceptr d_hit_records_ = 0;
+    CUdeviceptr d_ray_queue_in_ = 0;
+    CUdeviceptr d_ray_queue_out_ = 0;
+    CUdeviceptr d_shade_queue_ = 0;
+    CUdeviceptr d_ray_queue_counter_ = 0;
+    CUdeviceptr d_shade_queue_counter_ = 0;
+    CUdeviceptr d_materials_ = 0;
+    uint32_t wavefront_capacity_ = 0; // == width*height
+    bool wavefront_buffers_logged_ = false;
+    int material_count_ = 1;
+
     // Geometry buffers and handles
     CUdeviceptr d_vertices_ = 0;
     CUdeviceptr d_indices_ = 0;
@@ -121,6 +134,7 @@ private:
     bool buildSphereGAS(const scene::SceneDesc& sceneDesc);
     bool buildIAS(const scene::SceneDesc& sceneDesc);
     void allocateOutputBuffer(int width, int height);
+    void allocateWavefrontBuffers(int width, int height);
     
     // Logging callback
     static void contextLogCallback(unsigned int level, const char* tag, 
