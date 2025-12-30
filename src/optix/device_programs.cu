@@ -210,19 +210,31 @@ extern "C" __global__ void __raygen__shade() {
         return;
     }
 
-    // Termination conditions: miss or maxDepth reached.
+    // Debug must-kill switch: force a visible accum write on the first frame.
+    // Flip to 1 temporarily if you suspect resolve/accum wiring.
+    constexpr int kForceFirstFrameAccum = 0;
+    if (kForceFirstFrameAccum && params.frameIndex == 0u && ps.depth == 0u) {
+        atomicAdd(&params.accum[pixel].x, 0.8f);
+        atomicAdd(&params.accum[pixel].y, 0.2f);
+        atomicAdd(&params.accum[pixel].z, 0.2f);
+        atomicAdd(&params.accum[pixel].w, 1.0f);
+    }
+
+    // Termination condition 1: miss MUST contribute immediately.
     if (hr.t < 0.0f) {
         const float3 c = make_float3(0.1f, 0.1f, 0.1f);
-        const float4 old = params.accum[pixel];
-        params.accum[pixel] = make_float4(old.x + ps.throughput.x * c.x,
-                                          old.y + ps.throughput.y * c.y,
-                                          old.z + ps.throughput.z * c.z,
-                                          old.w + 1.0f);
+        atomicAdd(&params.accum[pixel].x, c.x * ps.throughput.x);
+        atomicAdd(&params.accum[pixel].y, c.y * ps.throughput.y);
+        atomicAdd(&params.accum[pixel].z, c.z * ps.throughput.z);
+        atomicAdd(&params.accum[pixel].w, 1.0f);
         return;
     }
 
-    if (ps.depth >= static_cast<uint32_t>(params.maxDepth)) {
-        // Minimal verifiable shading: normal visualization, modulated by throughput.
+    // Termination condition 2: maxDepth reached BEFORE generating the next ray.
+    // NOTE: host loops `for depth < maxDepth`, so if we enqueue rays at depth==maxDepth
+    // they will be stranded and never contribute. Therefore, terminate when the *next*
+    // depth would reach/exceed maxDepth.
+    if ((ps.depth + 1u) >= static_cast<uint32_t>(params.maxDepth)) {
         float3 n = hr.Ng;
         const float len2 = n.x * n.x + n.y * n.y + n.z * n.z;
         if (len2 > 0.0f) {
@@ -230,12 +242,12 @@ extern "C" __global__ void __raygen__shade() {
         } else {
             n = make_float3(0.0f, 1.0f, 0.0f);
         }
+
         const float3 c = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
-        const float4 old = params.accum[pixel];
-        params.accum[pixel] = make_float4(old.x + ps.throughput.x * c.x,
-                                          old.y + ps.throughput.y * c.y,
-                                          old.z + ps.throughput.z * c.z,
-                                          old.w + 1.0f);
+        atomicAdd(&params.accum[pixel].x, c.x * ps.throughput.x);
+        atomicAdd(&params.accum[pixel].y, c.y * ps.throughput.y);
+        atomicAdd(&params.accum[pixel].z, c.z * ps.throughput.z);
+        atomicAdd(&params.accum[pixel].w, 1.0f);
         return;
     }
 
@@ -387,4 +399,33 @@ extern "C" __global__ void __closesthit__ch() {
     const float3 hitColor = (geomType == 1) ? make_float3(0.0f, 1.0f, 0.0f) : make_float3(1.0f, 0.0f, 0.0f);
     optixSetPayload_0(1u);
     optixSetPayload_1(packRGB8(hitColor));
+}
+
+// ========================================
+// Wavefront Resolve Raygen
+// ========================================
+extern "C" __global__ void __raygen__resolve() {
+    const uint3 idx = optixGetLaunchIndex();
+    const unsigned int x = idx.x;
+    const unsigned int y = idx.y;
+    const unsigned int w = params.image_width;
+    const unsigned int h = params.image_height;
+    if (x >= w || y >= h) {
+        return;
+    }
+
+    const uint32_t pixel = static_cast<uint32_t>(y * w + x);
+    const float4 a = params.accum[pixel];
+    const float inv = (a.w > 0.0f) ? (1.0f / a.w) : 0.0f;
+    float3 c = make_float3(a.x * inv, a.y * inv, a.z * inv);
+
+    c.x = fminf(fmaxf(c.x, 0.0f), 1.0f);
+    c.y = fminf(fmaxf(c.y, 0.0f), 1.0f);
+    c.z = fminf(fmaxf(c.z, 0.0f), 1.0f);
+
+    params.output_buffer[pixel] = make_uchar4(
+        static_cast<unsigned char>(c.x * 255.0f),
+        static_cast<unsigned char>(c.y * 255.0f),
+        static_cast<unsigned char>(c.z * 255.0f),
+        255);
 }

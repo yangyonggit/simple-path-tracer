@@ -68,6 +68,7 @@ private:
     OptixProgramGroup raygen_primary_prog_group_ = nullptr;
     OptixProgramGroup raygen_trace_prog_group_ = nullptr;
     OptixProgramGroup raygen_shade_prog_group_ = nullptr;
+    OptixProgramGroup raygen_resolve_prog_group_ = nullptr;
     OptixProgramGroup miss_prog_group_ = nullptr;
     OptixProgramGroup miss_wf_prog_group_ = nullptr;
     OptixProgramGroup hitgroup_prog_group_ = nullptr;
@@ -81,6 +82,7 @@ private:
     CUdeviceptr raygen_primary_record_ = 0;
     CUdeviceptr raygen_trace_record_ = 0;
     CUdeviceptr raygen_shade_record_ = 0;
+    CUdeviceptr raygen_resolve_record_ = 0;
     CUdeviceptr miss_record_ = 0;
     CUdeviceptr hitgroup_record_ = 0;
     
@@ -107,6 +109,13 @@ private:
     int material_count_ = 1;
     uint32_t frame_index_ = 0;
     bool gen_primary_validated_ = false;
+    bool resolve_logged_ = false;
+
+    // Progressive accumulation reset when camera moves
+    bool has_last_camera_ = false;
+    std::array<float, 3> last_cam_pos_{};
+    std::array<float, 3> last_cam_front_{};
+    std::array<float, 3> last_cam_up_{};
 
     // Geometry buffers and handles
     CUdeviceptr d_vertices_ = 0;
