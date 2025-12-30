@@ -101,6 +101,10 @@ struct LaunchParams {
     float env_intensity;
     float env_max_clamp;
 
+    // Display transform (applied in __raygen__resolve only)
+    float exposure;
+    float gamma;
+
     // Single directional light (for direct lighting; no shadows/MIS).
     DirectionalLight dirLight;
     int hasDirLight;

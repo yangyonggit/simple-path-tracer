@@ -1562,6 +1562,10 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
     launch_params.env_intensity = env_ ? env_->getEnvironmentIntensity() : 1.0f;
     launch_params.env_max_clamp = env_ ? env_->getEnvironmentMaxClamp() : 0.0f;
 
+    // Display transform (applied in __raygen__resolve only)
+    launch_params.exposure = 2.2f;
+    launch_params.gamma = 2.2f;
+
     // Directional light (single), sourced from CPU LightManager.
     launch_params.hasDirLight = 0;
     launch_params.dirLight.direction = make_float3(0.0f, -1.0f, 0.0f);

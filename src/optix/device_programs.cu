@@ -866,6 +866,27 @@ extern "C" __global__ void __raygen__resolve() {
     const float inv = (a.w > 0.0f) ? (1.0f / a.w) : 0.0f;
     float3 c = make_float3(a.x * inv, a.y * inv, a.z * inv);
 
+    // Display transform (resolve-only): exposure -> Reinhard tonemap -> gamma encode.
+    const float exposure = (params.exposure > 0.0f) ? params.exposure : 1.0f;
+    const float gamma = (params.gamma > 0.0f) ? params.gamma : 2.2f;
+    const float invGamma = 1.0f / gamma;
+
+    c.x = fmaxf(c.x, 0.0f);
+    c.y = fmaxf(c.y, 0.0f);
+    c.z = fmaxf(c.z, 0.0f);
+
+    c.x *= exposure;
+    c.y *= exposure;
+    c.z *= exposure;
+
+    c.x = c.x / (1.0f + c.x);
+    c.y = c.y / (1.0f + c.y);
+    c.z = c.z / (1.0f + c.z);
+
+    c.x = powf(c.x, invGamma);
+    c.y = powf(c.y, invGamma);
+    c.z = powf(c.z, invGamma);
+
     c.x = fminf(fmaxf(c.x, 0.0f), 1.0f);
     c.y = fminf(fmaxf(c.y, 0.0f), 1.0f);
     c.z = fminf(fmaxf(c.z, 0.0f), 1.0f);
