@@ -66,14 +66,19 @@ private:
     OptixPipeline pipeline_ = nullptr;
     OptixProgramGroup raygen_prog_group_ = nullptr;
     OptixProgramGroup raygen_primary_prog_group_ = nullptr;
+    OptixProgramGroup raygen_trace_prog_group_ = nullptr;
     OptixProgramGroup miss_prog_group_ = nullptr;
+    OptixProgramGroup miss_wf_prog_group_ = nullptr;
     OptixProgramGroup hitgroup_prog_group_ = nullptr;
+    OptixProgramGroup hitgroup_wf_prog_group_ = nullptr;
     OptixProgramGroup hitgroup_sphere_prog_group_ = nullptr;
+    OptixProgramGroup hitgroup_sphere_wf_prog_group_ = nullptr;
     
     // Shader Binding Table
     OptixShaderBindingTable* sbt_ = nullptr;
     CUdeviceptr raygen_record_ = 0;
     CUdeviceptr raygen_primary_record_ = 0;
+    CUdeviceptr raygen_trace_record_ = 0;
     CUdeviceptr miss_record_ = 0;
     CUdeviceptr hitgroup_record_ = 0;
     

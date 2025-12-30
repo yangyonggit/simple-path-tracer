@@ -283,6 +283,30 @@ bool OptixBackend::createProgramGroups() {
             std::cout << "[OptixBackend] gen_primary raygen program group log:\n" << log << std::endl;
         }
     }
+
+    // Wavefront trace raygen program group (rayType=1)
+    {
+        OptixProgramGroupOptions pg_options = {};
+        OptixProgramGroupDesc pg_desc = {};
+        pg_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+        pg_desc.raygen.module = module_;
+        pg_desc.raygen.entryFunctionName = "__raygen__trace";
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixProgramGroupCreate(
+            context_,
+            &pg_desc,
+            1,
+            &pg_options,
+            log,
+            &sizeof_log,
+            &raygen_trace_prog_group_
+        ));
+
+        if (sizeof_log > 1) {
+            std::cout << "[OptixBackend] trace raygen program group log:\n" << log << std::endl;
+        }
+    }
     
     // Miss program group
     {
@@ -305,6 +329,30 @@ bool OptixBackend::createProgramGroups() {
         
         if (sizeof_log > 1) {
             std::cout << "[OptixBackend] Miss program group log:\n" << log << std::endl;
+        }
+    }
+
+    // Wavefront miss program group (rayType=1)
+    {
+        OptixProgramGroupOptions pg_options = {};
+        OptixProgramGroupDesc pg_desc = {};
+        pg_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
+        pg_desc.miss.module = module_;
+        pg_desc.miss.entryFunctionName = "__miss__ms_wf";
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixProgramGroupCreate(
+            context_,
+            &pg_desc,
+            1,
+            &pg_options,
+            log,
+            &sizeof_log,
+            &miss_wf_prog_group_
+        ));
+
+        if (sizeof_log > 1) {
+            std::cout << "[OptixBackend] Wavefront miss program group log:\n" << log << std::endl;
         }
     }
     
@@ -336,6 +384,34 @@ bool OptixBackend::createProgramGroups() {
         }
     }
 
+    // Wavefront hitgroup program group for triangles (closest hit only)
+    {
+        OptixProgramGroupOptions pg_options = {};
+        OptixProgramGroupDesc pg_desc = {};
+        pg_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+        pg_desc.hitgroup.moduleCH = module_;
+        pg_desc.hitgroup.entryFunctionNameCH = "__closesthit__ch_wf";
+        pg_desc.hitgroup.moduleAH = nullptr;
+        pg_desc.hitgroup.entryFunctionNameAH = nullptr;
+        pg_desc.hitgroup.moduleIS = nullptr;
+        pg_desc.hitgroup.entryFunctionNameIS = nullptr;
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixProgramGroupCreate(
+            context_,
+            &pg_desc,
+            1,
+            &pg_options,
+            log,
+            &sizeof_log,
+            &hitgroup_wf_prog_group_
+        ));
+
+        if (sizeof_log > 1) {
+            std::cout << "[OptixBackend] Wavefront hitgroup program group log:\n" << log << std::endl;
+        }
+    }
+
     // Hitgroup program group for spheres (bind built-in sphere IS module)
     {
         OptixProgramGroupOptions pg_options = {};
@@ -363,6 +439,34 @@ bool OptixBackend::createProgramGroups() {
             std::cout << "[OptixBackend] Sphere hitgroup program group log:\n" << log << std::endl;
         }
     }
+
+    // Wavefront hitgroup program group for spheres (bind built-in sphere IS module)
+    {
+        OptixProgramGroupOptions pg_options = {};
+        OptixProgramGroupDesc pg_desc = {};
+        pg_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
+        pg_desc.hitgroup.moduleCH = module_;
+        pg_desc.hitgroup.entryFunctionNameCH = "__closesthit__ch_wf";
+        pg_desc.hitgroup.moduleAH = nullptr;
+        pg_desc.hitgroup.entryFunctionNameAH = nullptr;
+        pg_desc.hitgroup.moduleIS = sphere_is_module_;
+        pg_desc.hitgroup.entryFunctionNameIS = nullptr;
+
+        sizeof_log = sizeof(log);
+        OPTIX_CHECK(optixProgramGroupCreate(
+            context_,
+            &pg_desc,
+            1,
+            &pg_options,
+            log,
+            &sizeof_log,
+            &hitgroup_sphere_wf_prog_group_
+        ));
+
+        if (sizeof_log > 1) {
+            std::cout << "[OptixBackend] Wavefront sphere hitgroup program group log:\n" << log << std::endl;
+        }
+    }
     
     std::cout << "[OptixBackend] Program groups created successfully" << std::endl;
     return true;
@@ -382,10 +486,22 @@ bool OptixBackend::createPipeline() {
     if (raygen_primary_prog_group_ != nullptr) {
         program_groups.push_back(raygen_primary_prog_group_);
     }
+    if (raygen_trace_prog_group_ != nullptr) {
+        program_groups.push_back(raygen_trace_prog_group_);
+    }
     program_groups.push_back(miss_prog_group_);
+    if (miss_wf_prog_group_ != nullptr) {
+        program_groups.push_back(miss_wf_prog_group_);
+    }
     program_groups.push_back(hitgroup_prog_group_);
+    if (hitgroup_wf_prog_group_ != nullptr) {
+        program_groups.push_back(hitgroup_wf_prog_group_);
+    }
     if (hitgroup_sphere_prog_group_ != nullptr) {
         program_groups.push_back(hitgroup_sphere_prog_group_);
+    }
+    if (hitgroup_sphere_wf_prog_group_ != nullptr) {
+        program_groups.push_back(hitgroup_sphere_wf_prog_group_);
     }
     
     OptixPipelineLinkOptions pipeline_link_options = {};
@@ -479,25 +595,44 @@ bool OptixBackend::createSBT() {
             cudaMemcpyHostToDevice
         ));
     }
-    
-    // Miss record
+
+    // trace raygen record
     {
-        const size_t miss_record_size = sizeof(MissRecord);
-        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&miss_record_), miss_record_size));
-        
-        MissRecord ms_sbt;
-        OPTIX_CHECK(optixSbtRecordPackHeader(miss_prog_group_, &ms_sbt));
-        
+        const size_t raygen_record_size = sizeof(RaygenRecord);
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&raygen_trace_record_), raygen_record_size));
+
+        RaygenRecord rg_sbt;
+        OPTIX_CHECK(optixSbtRecordPackHeader(raygen_trace_prog_group_, &rg_sbt));
+
         CUDA_CHECK(cudaMemcpy(
-            reinterpret_cast<void*>(miss_record_),
-            &ms_sbt,
-            miss_record_size,
+            reinterpret_cast<void*>(raygen_trace_record_),
+            &rg_sbt,
+            raygen_record_size,
             cudaMemcpyHostToDevice
         ));
     }
     
-    // Hitgroup records (1=triangle only, 2=triangle+sphere)
-    const uint32_t hitgroup_record_count = (gas_sphere_handle_ != 0) ? 2u : 1u;
+    // Miss records (rayTypeCount=2): [0]=legacy, [1]=wavefront
+    {
+        const size_t miss_record_size = sizeof(MissRecord);
+        const size_t total_size = miss_record_size * 2ull;
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&miss_record_), total_size));
+
+        std::vector<MissRecord> records(2);
+        OPTIX_CHECK(optixSbtRecordPackHeader(miss_prog_group_, &records[0]));
+        OPTIX_CHECK(optixSbtRecordPackHeader(miss_wf_prog_group_, &records[1]));
+
+        CUDA_CHECK(cudaMemcpy(
+            reinterpret_cast<void*>(miss_record_),
+            records.data(),
+            total_size,
+            cudaMemcpyHostToDevice
+        ));
+    }
+    
+    // Hitgroup records: 2 ray types (legacy + wavefront) per geometry
+    const uint32_t sbt_geom_count = (gas_sphere_handle_ != 0) ? 2u : 1u;
+    const uint32_t hitgroup_record_count = sbt_geom_count * 2u;
     {
         const size_t hitgroup_record_size = sizeof(HitgroupRecord);
         const size_t total_size = hitgroup_record_size * hitgroup_record_count;
@@ -505,14 +640,22 @@ bool OptixBackend::createSBT() {
 
         std::vector<HitgroupRecord> records(hitgroup_record_count);
 
-        // Record 0: triangles
+        // Geometry 0: triangles
+        //   idx 0: rayType 0 (legacy)
+        //   idx 1: rayType 1 (wavefront)
         OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_prog_group_, &records[0]));
         records[0].data.geomType = 0;
+        OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_wf_prog_group_, &records[1]));
+        records[1].data.geomType = 0;
 
-        if (hitgroup_record_count == 2u) {
-            // Record 1: spheres
-            OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_sphere_prog_group_, &records[1]));
-            records[1].data.geomType = 1;
+        if (sbt_geom_count == 2u) {
+            // Geometry 1: spheres
+            //   idx 2: rayType 0 (legacy)
+            //   idx 3: rayType 1 (wavefront)
+            OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_sphere_prog_group_, &records[2]));
+            records[2].data.geomType = 1;
+            OPTIX_CHECK(optixSbtRecordPackHeader(hitgroup_sphere_wf_prog_group_, &records[3]));
+            records[3].data.geomType = 1;
         }
 
         CUDA_CHECK(cudaMemcpy(
@@ -527,7 +670,7 @@ bool OptixBackend::createSBT() {
     sbt_->raygenRecord = raygen_record_;
     sbt_->missRecordBase = miss_record_;
     sbt_->missRecordStrideInBytes = sizeof(MissRecord);
-    sbt_->missRecordCount = 1;
+    sbt_->missRecordCount = 2;
     sbt_->hitgroupRecordBase = hitgroup_record_;
     sbt_->hitgroupRecordStrideInBytes = sizeof(HitgroupRecord);
     sbt_->hitgroupRecordCount = hitgroup_record_count;
@@ -824,7 +967,7 @@ bool OptixBackend::buildIAS(const scene::SceneDesc& sceneDesc) {
         oi.transform[4] = 0.0f;  oi.transform[5] = 1.0f;  oi.transform[6] = 0.0f;  oi.transform[7] = 0.0f;
         oi.transform[8] = 0.0f;  oi.transform[9] = 0.0f;  oi.transform[10] = 1.0f; oi.transform[11] = 0.0f;
         oi.instanceId = static_cast<uint32_t>(instances.size());
-        oi.sbtOffset = 1;  // sphere hitgroup record
+        oi.sbtOffset = 2;  // sphere geometry base (rayTypeCount=2)
         oi.visibilityMask = 0xFF;
         oi.flags = OPTIX_INSTANCE_FLAG_NONE;
         oi.traversableHandle = gas_sphere_handle_;
@@ -1141,7 +1284,10 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
         CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_shade_queue_counter_), 0, sizeof(uint32_t), stream_));
     }
 
+    const uint32_t capacity = static_cast<uint32_t>(width) * static_cast<uint32_t>(height);
+
     // 1) gen_primary: initialize PathState + fill rayQueueIn. Does NOT change framebuffer.
+    uint32_t ray_queue_count = capacity;
     {
         // Copy launch params to device
         CUDA_CHECK(cudaMemcpy(
@@ -1165,23 +1311,63 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
             1
         ));
 
-        // Validate queue count once (first frame)
+        // Read queue count once (first frame)
         if (!gen_primary_validated_ && launch_params.frameIndex == 0u) {
             CUDA_CHECK(cudaStreamSynchronize(stream_));
-            uint32_t queued = 0u;
             CUDA_CHECK(cudaMemcpy(
-                &queued,
+                &ray_queue_count,
                 reinterpret_cast<void*>(d_ray_queue_counter_),
                 sizeof(uint32_t),
                 cudaMemcpyDeviceToHost
             ));
-            std::cout << "[Wavefront] gen_primary queued paths: " << queued
+            std::cout << "[Wavefront] rayQueueCount = " << ray_queue_count
                       << " (expected " << (static_cast<uint32_t>(width) * static_cast<uint32_t>(height)) << ")" << std::endl;
             gen_primary_validated_ = true;
         }
     }
+
+    // 2) trace: consume rayQueueIn[0..N) and write hitRecords + shadeQueue (no fb writes)
+    if (d_shade_queue_counter_ != 0) {
+        CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<void*>(d_shade_queue_counter_), 0, sizeof(uint32_t), stream_));
+    }
+    {
+        if (ray_queue_count > 0u) {
+            // Copy launch params to device (unchanged)
+            CUDA_CHECK(cudaMemcpy(
+                reinterpret_cast<void*>(d_launch_params_),
+                &launch_params,
+                sizeof(optix::LaunchParams),
+                cudaMemcpyHostToDevice
+            ));
+
+            sbt_->raygenRecord = raygen_trace_record_;
+            OPTIX_CHECK(optixLaunch(
+                pipeline_,
+                stream_,
+                d_launch_params_,
+                sizeof(optix::LaunchParams),
+                sbt_,
+                ray_queue_count,
+                1,
+                1
+            ));
+
+            if (launch_params.frameIndex == 0u) {
+                CUDA_CHECK(cudaStreamSynchronize(stream_));
+                uint32_t shade_count = 0u;
+                CUDA_CHECK(cudaMemcpy(
+                    &shade_count,
+                    reinterpret_cast<void*>(d_shade_queue_counter_),
+                    sizeof(uint32_t),
+                    cudaMemcpyDeviceToHost
+                ));
+                std::cout << "[Wavefront] shadeQueueCount after trace = " << shade_count
+                          << " (expected " << ray_queue_count << ")" << std::endl;
+            }
+        }
+    }
     
-    // 2) Original raygen: renders debug color / geom coloring into framebuffer (must remain unchanged)
+    // 3) Original raygen: renders debug color / geom coloring into framebuffer (must remain unchanged)
     sbt_->raygenRecord = raygen_record_;
 
     // Copy launch params to device
@@ -1238,6 +1424,10 @@ void OptixBackend::destroy() {
     if (raygen_primary_record_ != 0) {
         cudaFree(reinterpret_cast<void*>(raygen_primary_record_));
         raygen_primary_record_ = 0;
+    }
+    if (raygen_trace_record_ != 0) {
+        cudaFree(reinterpret_cast<void*>(raygen_trace_record_));
+        raygen_trace_record_ = 0;
     }
     if (miss_record_ != 0) {
         cudaFree(reinterpret_cast<void*>(miss_record_));
@@ -1342,17 +1532,33 @@ void OptixBackend::destroy() {
         optixProgramGroupDestroy(raygen_primary_prog_group_);
         raygen_primary_prog_group_ = nullptr;
     }
+    if (raygen_trace_prog_group_ != nullptr) {
+        optixProgramGroupDestroy(raygen_trace_prog_group_);
+        raygen_trace_prog_group_ = nullptr;
+    }
     if (miss_prog_group_ != nullptr) {
         optixProgramGroupDestroy(miss_prog_group_);
         miss_prog_group_ = nullptr;
+    }
+    if (miss_wf_prog_group_ != nullptr) {
+        optixProgramGroupDestroy(miss_wf_prog_group_);
+        miss_wf_prog_group_ = nullptr;
     }
     if (hitgroup_prog_group_ != nullptr) {
         optixProgramGroupDestroy(hitgroup_prog_group_);
         hitgroup_prog_group_ = nullptr;
     }
+    if (hitgroup_wf_prog_group_ != nullptr) {
+        optixProgramGroupDestroy(hitgroup_wf_prog_group_);
+        hitgroup_wf_prog_group_ = nullptr;
+    }
     if (hitgroup_sphere_prog_group_ != nullptr) {
         optixProgramGroupDestroy(hitgroup_sphere_prog_group_);
         hitgroup_sphere_prog_group_ = nullptr;
+    }
+    if (hitgroup_sphere_wf_prog_group_ != nullptr) {
+        optixProgramGroupDestroy(hitgroup_sphere_wf_prog_group_);
+        hitgroup_sphere_wf_prog_group_ = nullptr;
     }
     
     // Destroy pipeline

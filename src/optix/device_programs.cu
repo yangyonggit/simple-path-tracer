@@ -51,6 +51,10 @@ static __forceinline__ __device__ float3 f3_normalize(const float3 v) {
     return make_float3(v.x * inv_len, v.y * inv_len, v.z * inv_len);
 }
 
+static __forceinline__ __device__ float3 f3_neg(const float3 v) {
+    return make_float3(-v.x, -v.y, -v.z);
+}
+
 static __forceinline__ __device__ uint32_t wang_hash(uint32_t a) {
     a = (a ^ 61u) ^ (a >> 16);
     a *= 9u;
@@ -114,6 +118,38 @@ extern "C" __global__ void __raygen__gen_primary() {
 }
 
 // ========================================
+// Wavefront Trace Raygen (rayType=1)
+// ========================================
+extern "C" __global__ void __raygen__trace() {
+    const uint32_t tid = optixGetLaunchIndex().x;
+    const uint32_t count = *params.rayQueueCounter;
+    if (tid >= count) {
+        return;
+    }
+
+    const uint32_t pathId = params.rayQueueIn[tid];
+    const PathState ps = params.paths[pathId];
+
+    unsigned int p0 = pathId;
+    unsigned int p1 = 0u;
+
+    // Use rayType=1 with rayTypeCount=2 so SBT selects wf miss/hit.
+    optixTrace(
+        params.topHandle,
+        ps.origin,
+        ps.direction,
+        1e-3f,
+        1e16f,
+        0.0f,
+        0xFF,
+        OPTIX_RAY_FLAG_NONE,
+        1,  // sbtOffset = rayType
+        2,  // sbtStride = rayTypeCount
+        1,  // missSBTIndex = rayType
+        p0, p1);
+}
+
+// ========================================
 // Ray Generation Program
 // ========================================
 extern "C" __global__ void __raygen__rg() {
@@ -139,9 +175,9 @@ extern "C" __global__ void __raygen__rg() {
         0.0f,                   // time
         0xFF,                   // visibility mask
         OPTIX_RAY_FLAG_DISABLE_ANYHIT,
-        0,                      // SBT offset
-        1,                      // SBT stride
-        0,                      // miss SBT index
+        0,                      // sbtOffset = rayType (legacy)
+        2,                      // sbtStride = rayTypeCount
+        0,                      // miss SBT index base
         p0, p1);
 
     // Payload contract:
@@ -159,6 +195,39 @@ extern "C" __global__ void __raygen__rg() {
         static_cast<unsigned char>(color.y * 255.0f),
         static_cast<unsigned char>(color.z * 255.0f),
         255);
+}
+
+// ========================================
+// Wavefront Miss Program (rayType=1)
+// ========================================
+extern "C" __global__ void __miss__ms_wf() {
+    const uint32_t pathId = optixGetPayload_0();
+    HitRecord& hr = params.hitRecords[pathId];
+    hr.pathId = pathId;
+    hr.t = -1.0f;
+    hr.Ng = make_float3(0.0f, 0.0f, 0.0f);
+    hr.materialId = -1;
+
+    const uint32_t idx = atomicAdd(reinterpret_cast<unsigned int*>(params.shadeQueueCounter), 1u);
+    params.shadeQueue[idx] = pathId;
+}
+
+// ========================================
+// Wavefront Closest Hit Program (rayType=1)
+// ========================================
+extern "C" __global__ void __closesthit__ch_wf() {
+    const uint32_t pathId = optixGetPayload_0();
+    HitRecord& hr = params.hitRecords[pathId];
+    hr.pathId = pathId;
+    hr.t = optixGetRayTmax();
+
+    // Placeholder normal: view normal
+    const float3 wo = optixGetWorldRayDirection();
+    hr.Ng = f3_normalize(f3_neg(wo));
+    hr.materialId = 0;
+
+    const uint32_t idx = atomicAdd(reinterpret_cast<unsigned int*>(params.shadeQueueCounter), 1u);
+    params.shadeQueue[idx] = pathId;
 }
 
 // ========================================
