@@ -299,10 +299,20 @@ extern "C" __global__ void __raygen__shade() {
             n = make_float3(0.0f, 1.0f, 0.0f);
         }
 
+        float3 albedo = make_float3(1.0f, 1.0f, 1.0f);
+        if (params.materials != nullptr && params.materialCount > 0) {
+            int mid = hr.materialId;
+            if (mid < 0) mid = 0;
+            if (mid >= params.materialCount) mid = params.materialCount - 1;
+            const DeviceMaterial m = params.materials[mid];
+            albedo = m.baseColor;
+        }
+
         const float3 c = f3_scale(f3_add(n, make_float3(1.0f, 1.0f, 1.0f)), 0.5f);
-        atomicAdd(&params.accum[pixel].x, c.x * ps.throughput.x);
-        atomicAdd(&params.accum[pixel].y, c.y * ps.throughput.y);
-        atomicAdd(&params.accum[pixel].z, c.z * ps.throughput.z);
+        const float3 shaded = make_float3(albedo.x * c.x, albedo.y * c.y, albedo.z * c.z);
+        atomicAdd(&params.accum[pixel].x, shaded.x * ps.throughput.x);
+        atomicAdd(&params.accum[pixel].y, shaded.y * ps.throughput.y);
+        atomicAdd(&params.accum[pixel].z, shaded.z * ps.throughput.z);
         atomicAdd(&params.accum[pixel].w, 1.0f);
         return;
     }

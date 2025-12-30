@@ -28,6 +28,7 @@ namespace scene {
 
 class Camera;
 class EnvironmentManager;
+class MaterialManager;
 
 namespace backends {
 
@@ -51,6 +52,10 @@ public:
     // Provide access to environment data (equirectangular HDR) for GPU sampling.
     // Pointer must remain valid for the duration of rendering.
     void setEnvironment(const EnvironmentManager* env) { env_ = env; }
+
+    // Provide access to CPU materials so we can upload them to the GPU.
+    // Pointer must remain valid for the duration of rendering.
+    void setMaterialManager(const MaterialManager* mm) { material_manager_ = mm; }
     
     // Release all OptiX resources
     void destroy();
@@ -111,7 +116,8 @@ private:
     CUdeviceptr d_materials_ = 0;
     uint32_t wavefront_capacity_ = 0; // == width*height
     bool wavefront_buffers_logged_ = false;
-    int material_count_ = 1;
+    bool materials_logged_ = false;
+    int material_count_ = 0;
     uint32_t frame_index_ = 0;
     bool gen_primary_validated_ = false;
     bool resolve_logged_ = false;
@@ -154,6 +160,7 @@ private:
 
     // Environment map (CUDA texture object) for GPU miss sampling
     const EnvironmentManager* env_ = nullptr;
+    const MaterialManager* material_manager_ = nullptr;
     void* d_env_array_ = nullptr; // cudaArray_t (kept opaque in header)
     uint64_t env_tex_ = 0;        // cudaTextureObject_t
     int env_width_ = 0;
@@ -177,6 +184,8 @@ private:
 
     bool updateEnvironmentTextureIfNeeded();
     void destroyEnvironmentTexture();
+
+    bool uploadMaterialsIfNeeded();
     
     // Logging callback
     static void contextLogCallback(unsigned int level, const char* tag, 

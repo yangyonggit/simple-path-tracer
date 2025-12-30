@@ -2,6 +2,8 @@
 
 #include <glm/glm.hpp>
 
+#include "optix/LaunchParams.h"
+
 struct Material {
     glm::vec3 albedo;       // Base color (diffuse reflectance)
     float metallic;         // Metallic factor [0.0, 1.0]
@@ -66,6 +68,9 @@ struct Material {
     
     // Main BRDF evaluation function
     glm::vec3 evaluateBRDF(const glm::vec3& N, const glm::vec3& V, const glm::vec3& L) const;
+
+    // Export minimal GPU material (no BRDF logic on GPU yet)
+    optix::DeviceMaterial toDevice() const;
 };
 
 // Material library with predefined materials

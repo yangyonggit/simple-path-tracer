@@ -118,6 +118,9 @@ void GLRenderer::renderLoop(backends::EmbreeBackend& backend, backends::OptixBac
 
     // Provide EnvironmentManager to OptiX backend for GPU miss sampling.
     m_optix_backend->setEnvironment(&path_tracer.getEnvironmentManager());
+
+    // Provide MaterialManager to OptiX backend for GPU shading.
+    m_optix_backend->setMaterialManager(&path_tracer.getMaterialManager());
     
     // Get RTCScene from backend
     RTCScene rtcScene = backend.getScene();

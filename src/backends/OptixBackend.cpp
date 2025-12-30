@@ -2,6 +2,7 @@
 #include "optix/LaunchParams.h"
 #include "scene/SceneDesc.h"
 #include "EnvironmentManager.h"
+#include "MaterialManager.h"
 
 #define NOMINMAX  // Prevent Windows min/max macros from conflicting with std::numeric_limits
 
@@ -1402,8 +1403,7 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
         d_paths_ != 0 && d_hit_records_ != 0 &&
         d_accum_ != 0 &&
         d_ray_queue_in_ != 0 && d_ray_queue_out_ != 0 && d_shade_queue_ != 0 &&
-        d_ray_queue_counter_ != 0 && d_ray_queue_out_counter_ != 0 && d_shade_queue_counter_ != 0 &&
-        d_materials_ != 0) {
+        d_ray_queue_counter_ != 0 && d_ray_queue_out_counter_ != 0 && d_shade_queue_counter_ != 0) {
         return;
     }
 
@@ -1423,14 +1423,12 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
     freeIf(d_ray_queue_counter_);
     freeIf(d_ray_queue_out_counter_);
     freeIf(d_shade_queue_counter_);
-    freeIf(d_materials_);
 
     const size_t paths_bytes = sizeof(optix::PathState) * static_cast<size_t>(capacity);
     const size_t hit_bytes = sizeof(optix::HitRecord) * static_cast<size_t>(capacity);
     const size_t accum_bytes = sizeof(float4) * static_cast<size_t>(capacity);
     const size_t queue_bytes = sizeof(uint32_t) * static_cast<size_t>(capacity);
     const size_t counter_bytes = sizeof(uint32_t);
-    const size_t materials_bytes = sizeof(optix::DeviceMaterial) * static_cast<size_t>(material_count_);
 
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_paths_), paths_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_hit_records_), hit_bytes));
@@ -1441,22 +1439,6 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_counter_), counter_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_ray_queue_out_counter_), counter_bytes));
     CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_shade_queue_counter_), counter_bytes));
-    CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_materials_), materials_bytes));
-
-    // Upload one default material (scaffolding only; device programs don't use it yet)
-    {
-        optix::DeviceMaterial m{};
-        m.baseColor = make_float3(1.0f, 1.0f, 1.0f);
-        m.roughness = 1.0f;
-        m.metallic = 0.0f;
-        m.type = 0;
-        CUDA_CHECK(cudaMemcpy(
-            reinterpret_cast<void*>(d_materials_),
-            &m,
-            sizeof(optix::DeviceMaterial),
-            cudaMemcpyHostToDevice
-        ));
-    }
 
     wavefront_capacity_ = capacity;
 
@@ -1472,8 +1454,48 @@ void OptixBackend::allocateWavefrontBuffers(int width, int height) {
         std::cout << "  rayQueueCounter: " << counter_bytes << " bytes" << std::endl;
         std::cout << "  rayQueueOutCounter: " << counter_bytes << " bytes" << std::endl;
         std::cout << "  shadeQueueCounter: " << counter_bytes << " bytes" << std::endl;
-        std::cout << "  materials: " << materials_bytes << " bytes (count=" << material_count_ << ")" << std::endl;
     }
+}
+
+// ========================================
+// Upload Materials
+// ========================================
+bool OptixBackend::uploadMaterialsIfNeeded() {
+    if (material_manager_ == nullptr) {
+        return false;
+    }
+
+    std::vector<optix::DeviceMaterial> mats;
+    material_manager_->buildDeviceMaterials(mats);
+    if (mats.empty()) {
+        return false;
+    }
+
+    const int new_count = static_cast<int>(mats.size());
+    if (new_count != material_count_) {
+        if (d_materials_ != 0) {
+            CUDA_CHECK(cudaFree(reinterpret_cast<void*>(d_materials_)));
+            d_materials_ = 0;
+        }
+        const size_t bytes = sizeof(optix::DeviceMaterial) * static_cast<size_t>(new_count);
+        CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_materials_), bytes));
+        material_count_ = new_count;
+        materials_logged_ = false;
+    }
+
+    const size_t bytes = sizeof(optix::DeviceMaterial) * static_cast<size_t>(material_count_);
+    CUDA_CHECK(cudaMemcpy(
+        reinterpret_cast<void*>(d_materials_),
+        mats.data(),
+        bytes,
+        cudaMemcpyHostToDevice));
+
+    if (!materials_logged_) {
+        materials_logged_ = true;
+        std::cout << "[OptixBackend] Uploaded " << material_count_ << " materials to GPU." << std::endl;
+    }
+
+    return true;
 }
 
 // ========================================
@@ -1519,6 +1541,9 @@ void OptixBackend::render(unsigned char* pixels, int width, int height, const Ca
 
     // Ensure environment texture is up-to-date (if an HDR equirect is loaded).
     updateEnvironmentTextureIfNeeded();
+
+    // Ensure GPU materials are uploaded (if a MaterialManager is provided).
+    uploadMaterialsIfNeeded();
     
     // Setup launch parameters
     optix::LaunchParams launch_params;

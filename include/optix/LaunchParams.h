@@ -28,10 +28,12 @@ struct HitRecord {
 };
 
 struct DeviceMaterial {
-    float3 baseColor;
-    float roughness;
+    float3 baseColor;   // linear
     float metallic;
-    int type;
+    float roughness;
+    int type;           // 0=diffuse (for now)
+    float3 emission;    // unused for now
+    float pad;
 };
 
 // ========================================

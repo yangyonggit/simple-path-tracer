@@ -85,3 +85,15 @@ glm::vec3 Material::evaluateBRDF(const glm::vec3& N, const glm::vec3& V, const g
     // Combine diffuse and specular
     return (kD * diffuse + specular) * NdotL;
 }
+
+optix::DeviceMaterial Material::toDevice() const {
+    optix::DeviceMaterial dm{};
+    const glm::vec3 dc = getDiffuseColor();
+    dm.baseColor = make_float3(dc.x, dc.y, dc.z);
+    dm.metallic = metallic;
+    dm.roughness = roughness;
+    dm.type = 0;
+    dm.emission = make_float3(0.0f, 0.0f, 0.0f);
+    dm.pad = 0.0f;
+    return dm;
+}

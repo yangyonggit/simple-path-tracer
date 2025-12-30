@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Material.h"
+#include "optix/LaunchParams.h"
 #include <vector>
 #include <embree4/rtcore.h>
 #include <glm/glm.hpp>
@@ -26,7 +27,9 @@ public:
     void setMaterial(int index, const Material& material);
     void setMaterial(int index, Material&& material);
     const Material& getMaterial(int index) const;
-    size_t getMaterialCount() const { return m_materials.size(); }
+    int getMaterialCount() const;
+
+    void buildDeviceMaterials(std::vector<optix::DeviceMaterial>& out) const;
     
     // Geometry to material ID mapping
     void setGeomMaterialMapping(const std::vector<uint32_t>& geomMaterialId) {

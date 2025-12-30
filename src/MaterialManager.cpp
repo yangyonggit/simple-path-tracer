@@ -6,6 +6,18 @@ MaterialManager::MaterialManager() {
     setupDefaultMaterials();
 }
 
+int MaterialManager::getMaterialCount() const {
+    return static_cast<int>(m_materials.size());
+}
+
+void MaterialManager::buildDeviceMaterials(std::vector<optix::DeviceMaterial>& out) const {
+    out.clear();
+    out.reserve(m_materials.size());
+    for (const auto& m : m_materials) {
+        out.push_back(m.toDevice());
+    }
+}
+
 void MaterialManager::setupDefaultMaterials() {
     // Clear existing materials
     m_materials.clear();
