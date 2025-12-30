@@ -4,6 +4,13 @@
 
 #include "optix/LaunchParams.h"
 
+struct BSDFSample {
+    glm::vec3 wi;   // sampled incident direction (world space)
+    glm::vec3 f;    // BSDF value
+    float pdf;      // pdf(wi)
+    bool valid;
+};
+
 struct Material {
     glm::vec3 albedo;       // Base color (diffuse reflectance)
     float metallic;         // Metallic factor [0.0, 1.0]
@@ -68,6 +75,14 @@ struct Material {
     
     // Main BRDF evaluation function
     glm::vec3 evaluateBRDF(const glm::vec3& N, const glm::vec3& V, const glm::vec3& L) const;
+
+    // Sampling-based GGX interface for CPU path tracing (specular only; no diffuse).
+    BSDFSample evaluateSample(
+        const glm::vec3& N,
+        const glm::vec3& V,
+        float u1,
+        float u2
+    ) const;
 
     // Export minimal GPU material (no BRDF logic on GPU yet)
     optix::DeviceMaterial toDevice() const;
